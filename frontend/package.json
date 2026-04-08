@@ -1,0 +1,57 @@
+{
+  "name": "hopeos",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "deploy": "npm run build && firebase deploy",
+    "init-diagnoses": "node scripts/initializeDiagnosesClient.js",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "desktop": "tauri dev",
+    "desktop:build": "bash scripts/build-desktop.sh",
+    "build:backend": "cd backend && pip install pyinstaller && pyinstaller hopeos-backend.spec --distpath dist --noconfirm"
+  },
+  "keywords": [
+    "hopeos",
+    "patient-portal",
+    "healthcare",
+    "react"
+  ],
+  "author": "HopeOS",
+  "license": "MIT",
+  "description": "HopeOS - Patient portal allowing patients to access their medical records, lab results, and appointments",
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/icons-material": "^7.3.1",
+    "@mui/material": "^7.3.1",
+    "@mui/x-date-pickers": "^8.10.2",
+    "@tauri-apps/api": "^2.10.1",
+    "@types/react": "^19.1.11",
+    "@types/react-dom": "^19.1.8",
+    "@vitejs/plugin-react": "^4.7.0",
+    "axios": "^1.11.0",
+    "firebase": "^12.1.0",
+    "firebase-tools": "^13.35.1",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^3.0.4",
+    "lucide-react": "^0.542.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^6.30.1",
+    "recharts": "^3.3.0",
+    "typescript": "^5.9.2",
+    "vite": "^6.3.5"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.10.1",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.17"
+  }
+}

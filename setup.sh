@@ -19,6 +19,7 @@ GGUF_FILENAME="gemma-4-E2B-it-UD-IQ2_M.gguf"
 # ── Paths ────────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_DIR="$SCRIPT_DIR/backend/hopeos-backend"
+FRONTEND_DIR="$SCRIPT_DIR/frontend"
 VENV_DIR="$BACKEND_DIR/.venv"
 
 # ── Colors ───────────────────────────────────────────────────────────────────
@@ -235,7 +236,7 @@ asyncio.run(init_db())
 # ── Frontend Setup ───────────────────────────────────────────────────────────
 setup_frontend() {
     info "Setting up frontend..."
-    cd "$SCRIPT_DIR"
+    cd "$FRONTEND_DIR"
 
     if [[ ! -d node_modules ]]; then
         npm install --silent
@@ -265,8 +266,10 @@ launch() {
 
     # Start frontend
     info "Starting frontend on port $FRONTEND_PORT..."
+    cd "$FRONTEND_DIR"
     npm run dev &
     PIDS+=($!)
+    cd "$SCRIPT_DIR"
 
     # Wait for services to be ready
     sleep 3

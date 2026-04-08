@@ -1,0 +1,41 @@
+# AI/ML model files (too large)
+*.gguf
+models/
+backend/hopeos-backend/models/
+
+# Synthea (data generation tool, not needed at runtime)
+backend/hopeos-backend/synthea/
+*.jar
+
+# Python virtual environments
+.venv/
+*/.venv/
+**/.venv/
+venv/
+*/venv/
+**/venv/
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# Node modules (handled by Vercel)
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+
+# Local env files
+.env.local
+.env*.local
+
+# macOS
+.DS_Store
+
+# Tauri build artifacts
+src-tauri/target/
+
+# Mobile
+mobile/

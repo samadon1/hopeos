@@ -1,0 +1,24 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--progress=plain'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/hopeos-repo/hopeos-api:latest'
+      - '.'
+    timeout: '3600s'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/hopeos-repo/hopeos-api:latest'
+
+images:
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/hopeos-repo/hopeos-api:latest'
+
+timeout: '3600s'
+
+options:
+  machineType: 'E2_HIGHCPU_32'
+  diskSizeGb: 100
+  logging: CLOUD_LOGGING_ONLY
