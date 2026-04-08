@@ -1,8 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { UserPlus, LogOut, CheckCircle } from 'lucide-react';
-import { signOut } from 'firebase/auth';
-import { auth } from '../services/firebase';
 import PatientRegistration from '../components/admin/PatientRegistration';
 
 export default function RegistrarDashboard() {
@@ -10,13 +8,10 @@ export default function RegistrarDashboard() {
   const [showSuccess, setShowSuccess] = useState(false);
   const [lastPatientId, setLastPatientId] = useState<string | null>(null);
 
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      navigate('/admin/login');
-    } catch (error) {
-      console.error('Error logging out:', error);
-    }
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    navigate('/admin/login');
   };
 
   const handleRegistrationComplete = (patientId: string) => {

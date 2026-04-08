@@ -1,9 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Stethoscope, LogOut, Bell, FlaskConical, Pill, X, User, Clock } from 'lucide-react';
-import { signOut } from 'firebase/auth';
-import { collection, query, where, onSnapshot, orderBy, limit, Timestamp } from 'firebase/firestore';
-import { auth, db } from '../services/firebase';
+import { apiService } from '../services/api.service';
 import PatientSearch from '../components/admin/PatientSearch';
 
 interface Notification {
@@ -44,128 +42,74 @@ export default function DoctorDashboard() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Real-time listener for completed lab orders only
+  // Poll for completed lab orders and dispensed medications
   useEffect(() => {
-    const twentyFourHoursAgo = new Date();
-    twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
+    const fetchNotifications = async () => {
+      try {
+        const twentyFourHoursAgo = new Date();
+        twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
 
-    // Listen for completed lab orders only from last 24 hours
-    const labQuery = query(
-      collection(db, 'labOrders'),
-      where('status', '==', 'completed')
-    );
+        // Fetch completed lab orders
+        const labOrders = await apiService.getLabOrders('completed');
+        const labNotifications: Notification[] = (labOrders || [])
+          .map((order: any) => {
+            const completedAt = order.completed_at || order.updated_at || new Date().toISOString();
+            return {
+              id: `lab_${order.id}`,
+              orderId: order.id,
+              type: 'lab' as const,
+              patientId: order.patient_id,
+              patientName: order.patient_name || 'Unknown Patient',
+              itemName: order.test_name || order.test_type || 'Lab Test',
+              status: 'Results Ready',
+              completedAt: new Date(completedAt),
+              seen: seenIds.has(`lab_${order.id}`),
+            };
+          })
+          .filter((n: Notification) => n.completedAt >= twentyFourHoursAgo)
+          .sort((a: Notification, b: Notification) => b.completedAt.getTime() - a.completedAt.getTime())
+          .slice(0, 20);
 
-    const unsubscribeLab = onSnapshot(labQuery, (snapshot) => {
-      const labNotifications: Notification[] = [];
-      snapshot.docs.forEach((doc) => {
-        const data = doc.data();
-        // Get completedAt date
-        let notificationDate: Date;
-        if (data.completedAt?.toDate) {
-          notificationDate = data.completedAt.toDate();
-        } else if (data.completedAt) {
-          notificationDate = new Date(data.completedAt);
-        } else if (data.updatedAt?.toDate) {
-          notificationDate = data.updatedAt.toDate();
-        } else {
-          notificationDate = new Date();
-        }
+        // Fetch dispensed pharmacy orders
+        const pharmaOrders = await apiService.getPharmacyOrders('dispensed');
+        const medNotifications: Notification[] = (pharmaOrders || [])
+          .map((order: any) => {
+            const completedAt = order.dispensed_at || order.updated_at || new Date().toISOString();
+            return {
+              id: `med_${order.id}`,
+              orderId: order.id,
+              type: 'medication' as const,
+              patientId: order.patient_id,
+              patientName: order.patient_name || 'Unknown Patient',
+              itemName: order.medication_name || order.drug_name || 'Medication',
+              status: 'Dispensed',
+              completedAt: new Date(completedAt),
+              seen: seenIds.has(`med_${order.id}`),
+            };
+          })
+          .filter((n: Notification) => n.completedAt >= twentyFourHoursAgo)
+          .sort((a: Notification, b: Notification) => b.completedAt.getTime() - a.completedAt.getTime())
+          .slice(0, 20);
 
-        // Only show notifications from last 24 hours
-        if (notificationDate >= twentyFourHoursAgo) {
-          labNotifications.push({
-            id: `lab_${doc.id}`,
-            orderId: doc.id,
-            type: 'lab',
-            patientId: data.patientId,
-            patientName: data.patientName || 'Unknown Patient',
-            itemName: data.testName || data.testType || 'Lab Test',
-            status: 'Results Ready',
-            completedAt: notificationDate,
-            seen: seenIds.has(`lab_${doc.id}`),
-          });
-        }
-      });
-
-      // Sort by date desc and limit to 20
-      labNotifications.sort((a, b) => b.completedAt.getTime() - a.completedAt.getTime());
-      const limitedLabNotifs = labNotifications.slice(0, 20);
-
-      setNotifications((prev) => {
-        const medicationNotifs = prev.filter((n) => n.type === 'medication');
-        return [...limitedLabNotifs, ...medicationNotifs].sort(
-          (a, b) => b.completedAt.getTime() - a.completedAt.getTime()
+        setNotifications(
+          [...labNotifications, ...medNotifications].sort(
+            (a, b) => b.completedAt.getTime() - a.completedAt.getTime()
+          )
         );
-      });
-    }, (error) => {
-      console.error('Error listening to lab orders:', error);
-    });
-
-    // Listen for dispensed medications (simple query without orderBy)
-    const medQuery = query(
-      collection(db, 'prescriptions'),
-      where('status', '==', 'dispensed')
-    );
-
-    const unsubscribeMed = onSnapshot(medQuery, (snapshot) => {
-      const medNotifications: Notification[] = [];
-      snapshot.docs.forEach((doc) => {
-        const data = doc.data();
-        // Handle dispensedAt field
-        let completedAt: Date;
-        if (data.dispensedAt?.toDate) {
-          completedAt = data.dispensedAt.toDate();
-        } else if (data.dispensedAt) {
-          completedAt = new Date(data.dispensedAt);
-        } else if (data.updatedAt?.toDate) {
-          completedAt = data.updatedAt.toDate();
-        } else {
-          completedAt = new Date();
-        }
-
-        // Only show notifications from last 24 hours
-        if (completedAt >= twentyFourHoursAgo) {
-          medNotifications.push({
-            id: `med_${doc.id}`,
-            orderId: doc.id, // Store the actual document ID for opening the modal
-            type: 'medication',
-            patientId: data.patientId,
-            patientName: data.patientName || 'Unknown Patient',
-            itemName: data.medicationName || data.drugName || 'Medication',
-            status: 'Dispensed',
-            completedAt,
-            seen: seenIds.has(`med_${doc.id}`),
-          });
-        }
-      });
-
-      // Sort by completedAt desc and limit to 20
-      medNotifications.sort((a, b) => b.completedAt.getTime() - a.completedAt.getTime());
-      const limitedMedNotifs = medNotifications.slice(0, 20);
-
-      setNotifications((prev) => {
-        const labNotifs = prev.filter((n) => n.type === 'lab');
-        return [...labNotifs, ...limitedMedNotifs].sort(
-          (a, b) => b.completedAt.getTime() - a.completedAt.getTime()
-        );
-      });
-    }, (error) => {
-      console.error('Error listening to prescriptions:', error);
-    });
-
-    return () => {
-      unsubscribeLab();
-      unsubscribeMed();
+      } catch (error) {
+        console.error('Error fetching notifications:', error);
+      }
     };
+
+    fetchNotifications();
+    const interval = setInterval(fetchNotifications, 30000); // Poll every 30s
+    return () => clearInterval(interval);
   }, [seenIds]);
 
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      navigate('/admin/login');
-    } catch (error) {
-      console.error('Error logging out:', error);
-    }
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    navigate('/admin/login');
   };
 
   const unreadCount = notifications.filter((n) => !seenIds.has(n.id)).length;

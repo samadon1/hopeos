@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# HopeOS macOS Launcher
+# Runs setup.sh inside a Terminal window so the user can see progress.
+
+set -euo pipefail
+
+# Resolve the project root (3 levels up from Contents/MacOS/)
+APP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+
+# If the .app is inside the project, use the project's setup.sh
+# Otherwise look for setup.sh relative to where the .app was placed
+find_project_root() {
+    # Check if we're inside the project tree
+    local dir="$APP_DIR"
+    for _ in 1 2 3 4 5; do
+        dir="$(dirname "$dir")"
+        if [[ -f "$dir/setup.sh" ]]; then
+            echo "$dir"
+            return
+        fi
+    done
+
+    # Check common locations
+    if [[ -f "$HOME/HopeOS/setup.sh" ]]; then
+        echo "$HOME/HopeOS"
+        return
+    fi
+
+    # Fallback: same directory as the .app
+    local app_parent="$(dirname "$APP_DIR")"
+    if [[ -f "$app_parent/setup.sh" ]]; then
+        echo "$app_parent"
+        return
+    fi
+
+    echo ""
+}
+
+PROJECT_ROOT="$(find_project_root)"
+
+if [[ -z "$PROJECT_ROOT" || ! -f "$PROJECT_ROOT/setup.sh" ]]; then
+    osascript -e 'display alert "HopeOS" message "Could not find setup.sh. Make sure HopeOS.app is inside the HopeOS project folder." as critical'
+    exit 1
+fi
+
+# Open Terminal and run setup.sh
+osascript << EOF
+tell application "Terminal"
+    activate
+    do script "cd '$PROJECT_ROOT' && bash setup.sh"
+end tell
+EOF

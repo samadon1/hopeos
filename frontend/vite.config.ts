@@ -28,9 +28,7 @@ export default defineConfig({
           'react-vendor': ['react', 'react-dom', 'react-router-dom'],
           // MUI - large, load separately
           'mui-vendor': ['@mui/material', '@mui/icons-material', '@emotion/react', '@emotion/styled'],
-          // Firebase - only needed for specific features
-          'firebase-vendor': ['firebase/app', 'firebase/auth', 'firebase/firestore'],
-          // Charts - only needed on dashboard
+// Charts - only needed on dashboard
           'charts-vendor': ['recharts'],
         },
       },

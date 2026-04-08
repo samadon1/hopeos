@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=2.0.0
+Type=Application
+Name=HopeOS
+Comment=AI-Powered EHR for Rural Healthcare
+Exec=bash -c 'PROJECT_DIR="$(dirname "$(readlink -f "%k")")"; if [ -f "$PROJECT_DIR/setup.sh" ]; then cd "$PROJECT_DIR" && x-terminal-emulator -e bash setup.sh 2>/dev/null || gnome-terminal -- bash setup.sh 2>/dev/null || xterm -e bash setup.sh; else echo "Error: setup.sh not found. Place hopeos.desktop in the HopeOS project root."; read -p "Press Enter..."; fi'
+Icon=hopeos
+Terminal=false
+Categories=Science;MedicalSoftware;
+StartupNotify=true

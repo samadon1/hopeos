@@ -3,8 +3,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X, FlaskConical, Loader2, CheckCircle, Image as ImageIcon, File } from 'lucide-react';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { storage } from '../../services/firebase';
 
 interface LabResultModalProps {
   order: any;
@@ -97,25 +95,9 @@ export default function LabResultModal({ order, onClose, onComplete }: LabResult
   };
 
   const uploadAttachments = async (orderId: string): Promise<{ imageUrls: string[]; fileUrls: Array<{ name: string; url: string }> }> => {
-    const uploadedImageUrls: string[] = [];
-    const uploadedFileUrls: Array<{ name: string; url: string }> = [];
-
-    // Upload images
-    for (const image of selectedImages) {
-      const imageRef = ref(storage, `lab-results/${orderId}/${Date.now()}-${image.name}`);
-      await uploadBytes(imageRef, image);
-      const url = await getDownloadURL(imageRef);
-      uploadedImageUrls.push(url);
-    }
-
-    // Upload files
-    for (const file of selectedFiles) {
-      const fileRef = ref(storage, `lab-results/${orderId}/${Date.now()}-${file.name}`);
-      await uploadBytes(fileRef, file);
-      const url = await getDownloadURL(fileRef);
-      uploadedFileUrls.push({ name: file.name, url });
-    }
-
+    // Create local object URLs for selected files (file upload to server can be added later)
+    const uploadedImageUrls = selectedImages.map(image => URL.createObjectURL(image));
+    const uploadedFileUrls = selectedFiles.map(file => ({ name: file.name, url: URL.createObjectURL(file) }));
     return { imageUrls: uploadedImageUrls, fileUrls: uploadedFileUrls };
   };
 
