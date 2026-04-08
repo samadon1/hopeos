@@ -522,16 +522,12 @@ async def analytics_query(
             detail="Admin access required for analytics queries"
         )
 
-    # Run AI call in thread pool to avoid blocking event loop
+    # Run AI call in thread to avoid blocking event loop
     import asyncio
-    from concurrent.futures import ThreadPoolExecutor
-    loop = asyncio.get_event_loop()
-    with ThreadPoolExecutor() as executor:
-        result = await loop.run_in_executor(
-            executor,
-            ai_service.generate_analytics_query,
-            request.question
-        )
+    result = await asyncio.to_thread(
+        ai_service.generate_analytics_query,
+        request.question
+    )
 
     if "error" in result:
         raise HTTPException(
