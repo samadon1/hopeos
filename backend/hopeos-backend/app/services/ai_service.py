@@ -1,4 +1,4 @@
-"""AI Service using llama-cpp-python for local LLM inference."""
+"""AI Service using Ollama for local LLM inference with Gemma 4."""
 import os
 import re
 import json
@@ -6,129 +6,24 @@ import base64
 import asyncio
 import subprocess
 import tempfile
+import httpx
 from typing import Optional, List, AsyncGenerator, Dict, Any
 from pathlib import Path
 
-# Lazy import to avoid startup failures if model not downloaded
-llama_cpp = None
-huggingface_hub = None
-
-
-def get_llama_cpp():
-    """Lazy load llama_cpp module."""
-    global llama_cpp
-    if llama_cpp is None:
-        try:
-            import llama_cpp as _llama_cpp
-            llama_cpp = _llama_cpp
-        except ImportError:
-            raise ImportError(
-                "llama-cpp-python not installed. Run: pip install llama-cpp-python"
-            )
-    return llama_cpp
-
-
-def get_huggingface_hub():
-    """Lazy load huggingface_hub module."""
-    global huggingface_hub
-    if huggingface_hub is None:
-        try:
-            import huggingface_hub as _hf
-            huggingface_hub = _hf
-        except ImportError:
-            raise ImportError(
-                "huggingface_hub not installed. Run: pip install huggingface_hub"
-            )
-    return huggingface_hub
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "hopeos-gemma4")
 
 
 class AIService:
-    """Service for AI-powered clinical decision support using Gemma 4."""
+    """Service for AI-powered clinical decision support using Gemma 4 via Ollama."""
 
     _instance: Optional["AIService"] = None
-    _llm = None  # Multimodal model with Llava handler
-    _llm_text = None  # Text-only model with proper Gemma chat format
-    _chat_handler = None
-
-    # Model paths - configurable via environment
-    MODEL_DIR = Path(os.getenv("MODEL_DIR", "./models"))
-    MODEL_PATH = MODEL_DIR / os.getenv(
-        "LLM_MODEL",
-        "gemma-4-E2B-it-Q3_K_S.gguf"  # Smallest quant for Pi 4 (2.3GB)
-    )
-    MMPROJ_PATH = MODEL_DIR / os.getenv(
-        "LLM_MMPROJ",
-        "mmproj-BF16.gguf"  # Unsloth BF16 vision projector
-    )
-
-    # Hugging Face repo info
-    HF_REPO = "unsloth/gemma-4-E2B-it-GGUF"
 
     def __init__(self):
         self.model_loaded = False
         self.is_multimodal = False
-        self.download_in_progress = False
-
-    def download_models(self, force: bool = False) -> dict:
-        """Download models from Hugging Face if not present.
-
-        Returns dict with status and paths.
-        """
-        if self.download_in_progress:
-            return {"status": "in_progress", "message": "Download already in progress"}
-
-        self.MODEL_DIR.mkdir(parents=True, exist_ok=True)
-
-        model_exists = self.MODEL_PATH.exists()
-        mmproj_exists = self.MMPROJ_PATH.exists()
-
-        if model_exists and mmproj_exists and not force:
-            return {
-                "status": "exists",
-                "model_path": str(self.MODEL_PATH),
-                "mmproj_path": str(self.MMPROJ_PATH),
-            }
-
-        try:
-            self.download_in_progress = True
-            hf = get_huggingface_hub()
-
-            results = {"status": "downloaded", "files": []}
-
-            # Download main model
-            if not model_exists or force:
-                model_name = self.MODEL_PATH.name
-                print(f"Downloading {model_name} from {self.HF_REPO}...")
-                path = hf.hf_hub_download(
-                    repo_id=self.HF_REPO,
-                    filename=model_name,
-                    local_dir=str(self.MODEL_DIR),
-                    local_dir_use_symlinks=False,
-                )
-                results["files"].append({"file": model_name, "path": path})
-                print(f"Downloaded: {path}")
-
-            # Download multimodal projector
-            if not mmproj_exists or force:
-                mmproj_name = self.MMPROJ_PATH.name
-                print(f"Downloading {mmproj_name} from {self.HF_REPO}...")
-                path = hf.hf_hub_download(
-                    repo_id=self.HF_REPO,
-                    filename=mmproj_name,
-                    local_dir=str(self.MODEL_DIR),
-                    local_dir_use_symlinks=False,
-                )
-                results["files"].append({"file": mmproj_name, "path": path})
-                print(f"Downloaded: {path}")
-
-            results["model_path"] = str(self.MODEL_PATH)
-            results["mmproj_path"] = str(self.MMPROJ_PATH)
-            return results
-
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-        finally:
-            self.download_in_progress = False
+        self._client = httpx.Client(base_url=OLLAMA_BASE_URL, timeout=120.0)
+        self._async_client = httpx.AsyncClient(base_url=OLLAMA_BASE_URL, timeout=120.0)
 
     @classmethod
     def get_instance(cls) -> "AIService":
@@ -138,102 +33,41 @@ class AIService:
         return cls._instance
 
     def load_model(self, force_reload: bool = False, auto_download: bool = False, preload_multimodal: bool = False) -> bool:
-        """Load the LLM model. Returns True if successful.
-
-        Args:
-            force_reload: Reload even if already loaded
-            auto_download: Download model if not present
-            preload_multimodal: Ignored - multimodal/vision is disabled (we use Tesseract OCR)
-
-        Note: We only load the text-only model. Document scanning uses Tesseract OCR
-        for text extraction, then Gemma for parsing - no vision model needed.
-        """
+        """Check that Ollama is running and the model is available."""
         if self.model_loaded and not force_reload:
             return True
 
-        lcp = get_llama_cpp()
-
-        if not self.MODEL_PATH.exists():
-            if auto_download:
-                print("Model not found, attempting download...")
-                result = self.download_models()
-                if result.get("status") == "error":
-                    print(f"Download failed: {result.get('message')}")
-                    return False
-            else:
-                print(f"Model not found at {self.MODEL_PATH}")
-                print("Download with: huggingface-cli download ggml-org/gemma-4-E2B-it-GGUF")
-                print("Or call download_models() to auto-download")
-                return False
-
         try:
-            print(f"Loading model: {self.MODEL_PATH}")
-
-            # Load text-only model with built-in chat template
-            # This uses the model's native chat_template which works correctly for Gemma 4
-            print("Loading text-only model (uses built-in chat template)...")
-            self._llm_text = lcp.Llama(
-                model_path=str(self.MODEL_PATH),
-                n_ctx=2048,  # Reduced context for faster inference
-                n_gpu_layers=-1,  # All layers on GPU
-                n_batch=512,  # Larger batch for faster prompt processing
-                flash_attn=True,  # Flash Attention for speedup
-                type_k=lcp.GGML_TYPE_Q8_0,  # Quantize KV cache keys
-                type_v=lcp.GGML_TYPE_Q8_0,  # Quantize KV cache values
-                verbose=False,
-            )
-            print("Text-only model loaded!")
-
-            # Vision/multimodal is DISABLED - we use Tesseract OCR for document scanning
-            # This avoids loading the multimodal projector which can cause GPU issues
-            self.is_multimodal = False
-            self._llm = None  # Ensure multimodal model is not loaded
-            print("Vision disabled - using Tesseract OCR for document scanning.")
-
+            resp = self._client.get("/api/tags")
+            resp.raise_for_status()
+            models = [m["name"] for m in resp.json().get("models", [])]
+            if not any(OLLAMA_MODEL in m for m in models):
+                print(f"Model '{OLLAMA_MODEL}' not found in Ollama. Available: {models}")
+                print(f"Run: ollama create {OLLAMA_MODEL} -f models/Modelfile")
+                return False
+            print(f"Ollama model '{OLLAMA_MODEL}' ready.")
             self.model_loaded = True
             return True
-
+        except httpx.ConnectError:
+            print("Ollama not running. Start with: brew services start ollama")
+            return False
         except Exception as e:
-            print(f"Failed to load model: {e}")
-            self.model_loaded = False
+            print(f"Failed to connect to Ollama: {e}")
             return False
 
-    def _load_multimodal_model(self) -> bool:
-        """Lazy-load the multimodal model with Llava handler.
-
-        Returns True if successful, False otherwise.
-        """
-        if self._llm is not None:
-            return True  # Already loaded
-
-        if not self.MMPROJ_PATH.exists():
-            print("Multimodal projector not found")
-            return False
-
-        try:
-            lcp = get_llama_cpp()
-            from llama_cpp.llama_chat_format import Llama3VisionAlphaChatHandler
-
-            print(f"Loading multimodal model with Llama3VisionAlpha handler (for Gemma 4)...")
-            chat_handler = Llama3VisionAlphaChatHandler(
-                clip_model_path=str(self.MMPROJ_PATH),
-            )
-            self._llm = lcp.Llama(
-                model_path=str(self.MODEL_PATH),
-                chat_handler=chat_handler,
-                n_ctx=2048,  # Reduced context for faster inference
-                n_gpu_layers=-1,  # All layers on GPU
-                n_batch=512,  # Larger batch for faster prompt processing
-                flash_attn=True,  # Flash Attention for ~20-30% speedup
-                type_k=lcp.GGML_TYPE_Q8_0,  # Quantize KV cache keys
-                type_v=lcp.GGML_TYPE_Q8_0,  # Quantize KV cache values
-                verbose=False,
-            )
-            print("Multimodal model loaded!")
-            return True
-        except Exception as e:
-            print(f"Failed to load multimodal model: {e}")
-            return False
+    def _call_ollama(self, messages: list, max_tokens: int = 512, temperature: float = 0.7) -> str:
+        """Call Ollama chat API synchronously."""
+        resp = self._client.post("/api/chat", json={
+            "model": OLLAMA_MODEL,
+            "messages": messages,
+            "stream": False,
+            "options": {
+                "num_predict": max_tokens,
+                "temperature": temperature,
+            },
+        })
+        resp.raise_for_status()
+        return resp.json().get("message", {}).get("content", "").strip()
 
     def generate(
         self,
@@ -243,73 +77,12 @@ class AIService:
         temperature: float = 0.7,
         image_base64: Optional[str] = None,
     ) -> str:
-        """Generate a response from the LLM.
-
-        For text-only requests, uses the text model with built-in chat template.
-        For multimodal requests (with images), uses the Llava chat handler.
-        """
+        """Generate a response from the LLM via Ollama."""
         if not self.model_loaded:
             if not self.load_model():
-                return "AI model not available. Please ensure the model is downloaded."
+                return "AI model not available. Please ensure Ollama is running."
 
-        # For text-only requests, use the text model with built-in chat template
-        if not image_base64:
-            return self._generate_text_only(prompt, system_prompt, max_tokens, temperature)
-
-        # Multimodal path - lazy load and use Llava handler
-        if not self.is_multimodal:
-            print(f"[DEBUG] WARNING: Image provided but multimodal not available, using text-only mode")
-            return self._generate_text_only(prompt, system_prompt, max_tokens, temperature)
-
-        # Lazy load multimodal model
-        if not self._load_multimodal_model():
-            print(f"[DEBUG] Failed to load multimodal model, using text-only mode")
-            return self._generate_text_only(prompt, system_prompt, max_tokens, temperature)
-
-        messages = []
-
-        # System prompt for medical context
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        else:
-            messages.append({
-                "role": "system",
-                "content": (
-                    "You are a clinical decision support assistant for HopeOS EHR. "
-                    "Provide helpful, accurate medical information while always "
-                    "recommending consultation with qualified healthcare providers "
-                    "for diagnosis and treatment decisions. Be concise and professional."
-                )
-            })
-
-        # Handle multimodal input (image + text)
-        # IMPORTANT: Gemma 4 requires image BEFORE text for proper vision processing
-        print(f"[DEBUG] Using multimodal mode with image ({len(image_base64)} base64 chars)")
-        messages.append({
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{image_base64}"}
-                },
-                {"type": "text", "text": prompt}
-            ]
-        })
-
-        try:
-            response = self._llm.create_chat_completion(
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
-            content = response.get("choices", [{}])[0].get("message", {}).get("content")
-            if content is None:
-                print(f"[DEBUG] LLM response structure: {response}")
-                return "Error: No content in LLM response"
-            return content
-        except Exception as e:
-            print(f"[DEBUG] LLM generation error: {e}")
-            return f"Error generating response: {str(e)}"
+        return self._generate_text_only(prompt, system_prompt, max_tokens, temperature)
 
     def _generate_text_only(
         self,
@@ -318,12 +91,7 @@ class AIService:
         max_tokens: int = 512,
         temperature: float = 0.7,
     ) -> str:
-        """Generate text using the text-only model with proper Gemma chat format.
-
-        This uses a separate Llama instance configured with chat_format='gemma'
-        instead of the Llava handler which doesn't correctly format text-only
-        prompts for Gemma models.
-        """
+        """Generate text using Ollama API."""
         default_system = (
             "You are a clinical decision support assistant for HopeOS EHR. "
             "Provide helpful, accurate medical information while always "
@@ -331,32 +99,15 @@ class AIService:
             "for diagnosis and treatment decisions. Be concise and professional."
         )
 
-        # Note: Gemma models don't officially support system messages,
-        # so we prepend the system prompt to the user message
         sys_content = system_prompt or default_system
         combined_prompt = f"{sys_content}\n\n{prompt}"
 
-        messages = [
-            {"role": "user", "content": combined_prompt}
-        ]
+        messages = [{"role": "user", "content": combined_prompt}]
 
         try:
-            # Use the text-only model with proper Gemma chat format
-            response = self._llm_text.create_chat_completion(
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
-
-            content = response.get("choices", [{}])[0].get("message", {}).get("content")
-            if content is None:
-                print(f"[DEBUG] Text-only LLM response structure: {response}")
-                return "Error: No content in LLM response"
-
-            return content.strip()
-
+            return self._call_ollama(messages, max_tokens, temperature)
         except Exception as e:
-            print(f"[DEBUG] Text-only generation error: {e}")
+            print(f"[DEBUG] Ollama generation error: {e}")
             return f"Error generating response: {str(e)}"
 
     async def generate_stream(
@@ -366,10 +117,7 @@ class AIService:
         max_tokens: int = 512,
         temperature: float = 0.7,
     ) -> AsyncGenerator[str, None]:
-        """Stream responses from the LLM using the text-only model.
-
-        Uses a thread pool to avoid blocking the event loop during inference.
-        """
+        """Stream responses from Ollama."""
         if not self.model_loaded:
             if not self.load_model():
                 yield "AI model not available."
@@ -382,58 +130,30 @@ class AIService:
             "for diagnosis and treatment decisions. Be concise and professional."
         )
 
-        # Note: Gemma models don't officially support system messages,
-        # so we prepend the system prompt to the user message
         sys_content = system_prompt or default_system
         combined_prompt = f"{sys_content}\n\n{prompt}"
+        messages = [{"role": "user", "content": combined_prompt}]
 
-        messages = [
-            {"role": "user", "content": combined_prompt}
-        ]
-
-        # Use a queue to pass chunks from thread to async generator
-        import queue
-        from concurrent.futures import ThreadPoolExecutor
-
-        chunk_queue: queue.Queue = queue.Queue()
-
-        def run_inference():
-            """Run blocking inference in a thread."""
-            try:
-                for chunk in self._llm_text.create_chat_completion(
-                    messages=messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    stream=True,
-                ):
-                    delta = chunk.get("choices", [{}])[0].get("delta", {})
-                    content = delta.get("content", "")
-                    if content:
-                        chunk_queue.put(content)
-                chunk_queue.put(None)  # Signal completion
-            except Exception as e:
-                chunk_queue.put(f"Error: {str(e)}")
-                chunk_queue.put(None)
-
-        # Start inference in a thread
-        loop = asyncio.get_event_loop()
-        executor = ThreadPoolExecutor(max_workers=1)
-        future = loop.run_in_executor(executor, run_inference)
-
-        # Yield chunks as they arrive
         try:
-            while True:
-                # Non-blocking check with small sleep to yield control
-                try:
-                    chunk = chunk_queue.get_nowait()
-                    if chunk is None:
-                        break
-                    yield chunk
-                except queue.Empty:
-                    await asyncio.sleep(0.01)  # Yield to event loop
-        finally:
-            await future  # Ensure thread completes
-            executor.shutdown(wait=False)
+            async with self._async_client.stream("POST", "/api/chat", json={
+                "model": OLLAMA_MODEL,
+                "messages": messages,
+                "stream": True,
+                "options": {
+                    "num_predict": max_tokens,
+                    "temperature": temperature,
+                },
+            }) as resp:
+                async for line in resp.aiter_lines():
+                    if line:
+                        data = json.loads(line)
+                        content = data.get("message", {}).get("content", "")
+                        if content:
+                            yield content
+                        if data.get("done"):
+                            break
+        except Exception as e:
+            yield f"Error: {str(e)}"
 
     def analyze_symptoms(self, symptoms: List[str], patient_info: dict = None) -> str:
         """Analyze symptoms and suggest possible conditions."""

@@ -522,12 +522,8 @@ async def analytics_query(
             detail="Admin access required for analytics queries"
         )
 
-    # Run AI call in thread to avoid blocking event loop
-    import asyncio
-    result = await asyncio.to_thread(
-        ai_service.generate_analytics_query,
-        request.question
-    )
+    # Simple blocking call - works reliably on single-user desktop app
+    result = ai_service.generate_analytics_query(request.question)
 
     if "error" in result:
         raise HTTPException(
