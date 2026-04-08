@@ -11,7 +11,7 @@ from typing import Optional, List, AsyncGenerator, Dict, Any
 from pathlib import Path
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "hopeos-gemma4")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "hopeos-gemma4-iq2")
 
 
 class AIService:
