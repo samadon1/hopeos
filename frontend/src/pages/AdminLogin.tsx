@@ -202,13 +202,7 @@ export default function AdminLogin() {
                 )}
               </button>
 
-              <button
-                onClick={() => window.open('https://hopeos.health', '_blank')}
-                disabled={loading}
-                className="w-full bg-transparent border-2 border-[#2a4f42] text-[#2a4f42] hover:bg-[#f0f5f3] font-medium py-4 rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-[15px]"
-              >
-                Get the app
-              </button>
+              {/* Get the app button - hidden for now */}
             </div>
 
           </div>

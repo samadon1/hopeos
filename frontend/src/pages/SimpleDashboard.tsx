@@ -1560,74 +1560,48 @@ const SimpleDashboard: React.FC<SimpleDashboardProps> = ({
                     </div>
                   </div>
 
-                  {/* Upcoming Appointments */}
+                  {/* Active Conditions */}
                   <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-6">
                     <div className="flex items-center justify-between mb-4 border-b border-gray-200 pb-3">
                       <div className="flex items-center space-x-3">
-                        <div className="h-8 w-8 bg-gray-100 rounded-xl flex items-center justify-center border border-gray-100">
-                          <Calendar className="h-4 w-4 text-gray-700" />
+                        <div className="h-8 w-8 bg-amber-50 rounded-xl flex items-center justify-center border border-amber-100">
+                          <FileText className="h-4 w-4 text-amber-700" />
                         </div>
-                        <h2 className="text-base font-semibold text-gray-800 uppercase tracking-wide">Upcoming Appointments</h2>
+                        <h2 className="text-base font-semibold text-gray-800 uppercase tracking-wide">Active Conditions</h2>
                       </div>
-                      <button className="text-xs text-gray-600 hover:text-gray-900 font-semibold uppercase tracking-wide">
-                        Schedule →
-                      </button>
+                      {patientData.diagnoses && patientData.diagnoses.length > 0 && (
+                        <span className="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-full font-medium">
+                          {patientData.diagnoses.length} {patientData.diagnoses.length === 1 ? 'condition' : 'conditions'}
+                        </span>
+                      )}
                     </div>
 
                     <div className="space-y-2">
-                      {patientData.appointments && patientData.appointments.length > 0 ? (
-                        patientData.appointments.map((appointment) => (
-                          <div key={appointment.uuid} className="border border-gray-100 bg-white rounded-xl shadow-sm p-4 hover:bg-gray-50">
-                            <div className="flex items-center justify-between mb-2">
-                              <div className="flex items-center space-x-3">
-                                <div className="h-7 w-7 bg-gray-100 rounded-xl flex items-center justify-center border border-gray-100">
-                                  <Calendar className="h-3.5 w-3.5 text-gray-700" />
-                                </div>
-                                <div>
-                                  <p className="text-sm font-semibold text-gray-800">
-                                    {appointment.service?.name || 'Appointment'}
-                                  </p>
-                                  <p className="text-xs text-gray-600">
-                                    {appointment.providers?.[0]?.name || 'Healthcare Provider'}
-                                  </p>
-                                </div>
-                              </div>
-                              <span className={`inline-flex items-center px-2 py-0.5 text-xs font-semibold border ${
-                                appointment.status === 'SCHEDULED' || !appointment.status
-                                  ? 'bg-blue-100 text-blue-800 border-blue-300'
-                                  : getStatusVariant(appointment.status)
-                              }`}>
-                                {appointment.status || 'SCHEDULED'}
-                              </span>
+                      {patientData.diagnoses && patientData.diagnoses.length > 0 ? (
+                        patientData.diagnoses.map((diagnosis: any, index: number) => (
+                          <div key={diagnosis.id || index} className="flex items-start space-x-3 p-3 border border-gray-100 bg-white hover:bg-gray-50 rounded-xl">
+                            <div className="h-7 w-7 bg-amber-50 rounded-xl flex items-center justify-center border border-amber-100 flex-shrink-0">
+                              <span className="text-xs font-bold text-amber-700">{index + 1}</span>
                             </div>
-                            <div className="flex items-center justify-between text-xs text-gray-600 mt-2 pt-2 border-t border-gray-100">
-                              <div className="flex items-center space-x-2">
-                                <Calendar className="h-3 w-3 text-gray-500" />
-                                <span className="font-mono">
-                                  {(() => {
-                                    const startDate = new Date(appointment.startDateTime);
-                                    const endDate = new Date(appointment.endDateTime);
-                                    
-                                    // Convert UTC to local time for display
-                                    const startLocal = new Date(appointment.startDateTime);
-                                    const endLocal = new Date(appointment.endDateTime);
-                                    
-                                    // Check if it's a very short duration at midnight (likely placeholder)
-                                    const durationMinutes = (endLocal.getTime() - startLocal.getTime()) / (1000 * 60);
-                                    const startHours = startLocal.getHours();
-                                    const startMinutes = startLocal.getMinutes();
-                                    
-                                    if (startHours === 0 && startMinutes === 0 && durationMinutes < 5) {
-                                      return `${startDate.toLocaleDateString()} (Time TBD)`;
-                                    }
-                                    
-                                    return `${startDate.toLocaleDateString()} ${startLocal.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} - ${endLocal.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
-                                  })()}
-                                </span>
-                              </div>
-                              <div className="flex items-center space-x-2">
-                                <MapPin className="h-3 w-3 text-gray-500" />
-                                <span>{appointment.location?.name || 'Main Clinic'}</span>
+                            <div className="flex-1">
+                              <p className="text-sm font-medium text-gray-800">
+                                {diagnosis.conditionText || diagnosis.condition_text || 'Unknown condition'}
+                              </p>
+                              <div className="flex items-center gap-2 mt-1">
+                                {diagnosis.certainty && (
+                                  <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                                    diagnosis.certainty === 'confirmed' ? 'bg-green-100 text-green-700' :
+                                    diagnosis.certainty === 'provisional' ? 'bg-yellow-100 text-yellow-700' :
+                                    'bg-gray-100 text-gray-600'
+                                  }`}>
+                                    {diagnosis.certainty}
+                                  </span>
+                                )}
+                                {(diagnosis.diagnosedDate || diagnosis.diagnosed_date) && (
+                                  <span className="text-xs text-gray-500">
+                                    {formatDate(diagnosis.diagnosedDate || diagnosis.diagnosed_date)}
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -1635,9 +1609,9 @@ const SimpleDashboard: React.FC<SimpleDashboardProps> = ({
                       ) : (
                         <div className="flex items-center justify-center p-8 border border-gray-100 bg-gray-50">
                           <div className="text-center">
-                            <Calendar className="h-12 w-12 text-gray-400 mx-auto mb-3" />
-                            <p className="text-sm font-medium text-gray-900 mb-1">No upcoming appointments</p>
-                            <p className="text-xs text-gray-500">Your scheduled appointments will appear here</p>
+                            <FileText className="h-12 w-12 text-gray-400 mx-auto mb-3" />
+                            <p className="text-sm font-medium text-gray-900 mb-1">No active conditions</p>
+                            <p className="text-xs text-gray-500">Diagnosed conditions will appear here</p>
                           </div>
                         </div>
                       )}
@@ -1645,105 +1619,54 @@ const SimpleDashboard: React.FC<SimpleDashboardProps> = ({
                   </div>
                 </div>
 
-                {/* Active Conditions & Allergies */}
-                {((patientData.diagnoses && patientData.diagnoses.length > 0) || (patientData.allergies && patientData.allergies.length > 0)) && (
-                  <div className={`grid gap-8 mb-8 ${askHopeOpen ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-2'}`}>
-                    {/* Diagnoses/Conditions */}
-                    {patientData.diagnoses && patientData.diagnoses.length > 0 && (
-                      <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-6">
-                        <div className="flex items-center justify-between mb-4 border-b border-gray-200 pb-3">
-                          <div className="flex items-center space-x-3">
-                            <div className="h-8 w-8 bg-amber-50 rounded-xl flex items-center justify-center border border-amber-100">
-                              <FileText className="h-4 w-4 text-amber-700" />
-                            </div>
-                            <h2 className="text-base font-semibold text-gray-800 uppercase tracking-wide">Active Conditions</h2>
+                {/* Allergies */}
+                {patientData.allergies && patientData.allergies.length > 0 && (
+                  <div className={`grid gap-8 mb-8 ${askHopeOpen ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-1'}`}>
+                    <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-6">
+                      <div className="flex items-center justify-between mb-4 border-b border-gray-200 pb-3">
+                        <div className="flex items-center space-x-3">
+                          <div className="h-8 w-8 bg-rose-50 rounded-xl flex items-center justify-center border border-rose-100">
+                            <AlertCircle className="h-4 w-4 text-rose-600" />
                           </div>
-                          <span className="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-full font-medium">
-                            {patientData.diagnoses.length} {patientData.diagnoses.length === 1 ? 'condition' : 'conditions'}
-                          </span>
+                          <h2 className="text-base font-semibold text-gray-800 uppercase tracking-wide">Allergies</h2>
                         </div>
-
-                        <div className="space-y-2">
-                          {patientData.diagnoses.map((diagnosis: any, index: number) => (
-                            <div key={diagnosis.id || index} className="flex items-start space-x-3 p-3 border border-gray-100 bg-white hover:bg-gray-50 rounded-xl">
-                              <div className="h-7 w-7 bg-amber-50 rounded-xl flex items-center justify-center border border-amber-100 flex-shrink-0">
-                                <span className="text-xs font-bold text-amber-700">{index + 1}</span>
-                              </div>
-                              <div className="flex-1">
-                                <p className="text-sm font-medium text-gray-800">
-                                  {diagnosis.conditionText || diagnosis.condition_text || 'Unknown condition'}
-                                </p>
-                                <div className="flex items-center gap-2 mt-1">
-                                  {diagnosis.certainty && (
-                                    <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
-                                      diagnosis.certainty === 'confirmed' ? 'bg-green-100 text-green-700' :
-                                      diagnosis.certainty === 'provisional' ? 'bg-yellow-100 text-yellow-700' :
-                                      'bg-gray-100 text-gray-600'
-                                    }`}>
-                                      {diagnosis.certainty}
-                                    </span>
-                                  )}
-                                  {(diagnosis.diagnosedDate || diagnosis.diagnosed_date) && (
-                                    <span className="text-xs text-gray-500">
-                                      {formatDate(diagnosis.diagnosedDate || diagnosis.diagnosed_date)}
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
+                        <span className="text-xs bg-rose-100 text-rose-700 px-2 py-1 rounded-full font-medium">
+                          {patientData.allergies.length} {patientData.allergies.length === 1 ? 'allergy' : 'allergies'}
+                        </span>
                       </div>
-                    )}
 
-                    {/* Allergies */}
-                    {patientData.allergies && patientData.allergies.length > 0 && (
-                      <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-6">
-                        <div className="flex items-center justify-between mb-4 border-b border-gray-200 pb-3">
-                          <div className="flex items-center space-x-3">
-                            <div className="h-8 w-8 bg-rose-50 rounded-xl flex items-center justify-center border border-rose-100">
-                              <AlertCircle className="h-4 w-4 text-rose-600" />
+                      <div className="space-y-2">
+                        {patientData.allergies.map((allergy: any, index: number) => (
+                          <div key={allergy.id || index} className="flex items-start space-x-3 p-3 border border-rose-100 bg-rose-50/30 hover:bg-rose-50/50 rounded-xl">
+                            <div className="h-7 w-7 bg-rose-100 rounded-xl flex items-center justify-center border border-rose-200 flex-shrink-0">
+                              <AlertCircle className="h-3.5 w-3.5 text-rose-600" />
                             </div>
-                            <h2 className="text-base font-semibold text-gray-800 uppercase tracking-wide">Allergies</h2>
+                            <div className="flex-1">
+                              <p className="text-sm font-medium text-gray-800">
+                                {allergy.allergen || 'Unknown allergen'}
+                              </p>
+                              <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                {allergy.criticality && (
+                                  <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                                    allergy.criticality === 'high' ? 'bg-rose-200 text-rose-800' :
+                                    allergy.criticality === 'low' ? 'bg-yellow-100 text-yellow-700' :
+                                    'bg-gray-100 text-gray-600'
+                                  }`}>
+                                    {allergy.criticality === 'unable-to-assess' ? 'Unknown severity' : allergy.criticality}
+                                  </span>
+                                )}
+                                {allergy.category && (
+                                  <span className="text-xs text-gray-500 capitalize">{allergy.category}</span>
+                                )}
+                                {allergy.reaction && (
+                                  <span className="text-xs text-gray-600">Reaction: {allergy.reaction}</span>
+                                )}
+                              </div>
+                            </div>
                           </div>
-                          <span className="text-xs bg-rose-100 text-rose-700 px-2 py-1 rounded-full font-medium">
-                            {patientData.allergies.length} {patientData.allergies.length === 1 ? 'allergy' : 'allergies'}
-                          </span>
-                        </div>
-
-                        <div className="space-y-2">
-                          {patientData.allergies.map((allergy: any, index: number) => (
-                            <div key={allergy.id || index} className="flex items-start space-x-3 p-3 border border-rose-100 bg-rose-50/30 hover:bg-rose-50/50 rounded-xl">
-                              <div className="h-7 w-7 bg-rose-100 rounded-xl flex items-center justify-center border border-rose-200 flex-shrink-0">
-                                <AlertCircle className="h-3.5 w-3.5 text-rose-600" />
-                              </div>
-                              <div className="flex-1">
-                                <p className="text-sm font-medium text-gray-800">
-                                  {allergy.allergen || 'Unknown allergen'}
-                                </p>
-                                <div className="flex items-center gap-2 mt-1 flex-wrap">
-                                  {allergy.criticality && (
-                                    <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
-                                      allergy.criticality === 'high' ? 'bg-rose-200 text-rose-800' :
-                                      allergy.criticality === 'low' ? 'bg-yellow-100 text-yellow-700' :
-                                      'bg-gray-100 text-gray-600'
-                                    }`}>
-                                      {allergy.criticality === 'unable-to-assess' ? 'Unknown severity' : allergy.criticality}
-                                    </span>
-                                  )}
-                                  {allergy.category && (
-                                    <span className="text-xs text-gray-500 capitalize">{allergy.category}</span>
-                                  )}
-                                  {allergy.reaction && (
-                                    <span className="text-xs text-gray-600">Reaction: {allergy.reaction}</span>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
+                        ))}
                       </div>
-                    )}
+                    </div>
                   </div>
                 )}
               </>

@@ -10,6 +10,9 @@ import {
   User,
   Bot,
   Trash2,
+  ClipboardList,
+  FileText,
+  FilePlus,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import apiService from '../../services/api.service';
@@ -67,90 +70,45 @@ export default function AskHope({ patientId, patientName, onOpenChange }: AskHop
     }
   }, [isOpen]);
 
-  // Generate initial summary when opened for the first time
-  useEffect(() => {
-    if (isOpen && messages.length === 0 && !loading) {
-      generateInitialSummary();
-    }
-  }, [isOpen]);
+  const ACTION_PILLS = [
+    {
+      label: 'Clinical Summary',
+      icon: ClipboardList,
+      prompt: "Provide a concise clinical summary of this patient's current status, highlighting any key concerns, active problems, and recent trends.",
+    },
+    {
+      label: 'Referral Note',
+      icon: FilePlus,
+      prompt: "Generate a referral note for this patient. Include patient demographics, current diagnoses, relevant history, current medications, recent vitals, and reason for referral. Format it as a professional medical referral letter.",
+    },
+    {
+      label: 'Discharge Note',
+      icon: FileText,
+      prompt: "Generate a discharge summary for this patient. Include admission diagnoses, treatment provided, current medications, follow-up instructions, and any pending results. Format it as a professional discharge note.",
+    },
+  ];
 
-  const generateInitialSummary = async () => {
-    setLoading(true);
-    setError(null);
-
-    // Create a placeholder message that we'll update as we stream
-    const messageId = Date.now().toString();
-    let streamedContent = '';
-
-    try {
-      await apiService.ehrAgentQueryStream(
-        {
-          question: "Provide a concise clinical summary of this patient's current status, highlighting any key concerns, active problems, and recent trends.",
-          patient_id: patientId,
-        },
-        {
-          onStatus: (status) => {
-            // Update the loading message with status
-            setMessages([{
-              id: messageId,
-              role: 'assistant',
-              content: `*${status}*`,
-              timestamp: new Date(),
-            }]);
-          },
-          onToolCall: (_tool, table, result) => {
-            // Show which data is being fetched
-            setMessages([{
-              id: messageId,
-              role: 'assistant',
-              content: `*Fetching ${table} data... (${result})*`,
-              timestamp: new Date(),
-            }]);
-          },
-          onContent: (content) => {
-            streamedContent += content;
-            setMessages([{
-              id: messageId,
-              role: 'assistant',
-              content: streamedContent,
-              timestamp: new Date(),
-            }]);
-          },
-          onDone: () => {
-            setLoading(false);
-          },
-          onError: (error) => {
-            setError(error || 'Failed to generate summary. Please try again.');
-            setLoading(false);
-          },
-        }
-      );
-    } catch (err: any) {
-      setError(err.message || 'Failed to generate summary. Please try again.');
-      setLoading(false);
-    }
+  const handlePillClick = (prompt: string) => {
+    submitQuery(prompt);
   };
 
-  const sendMessage = async () => {
-    if (!input.trim() || loading) return;
+  const submitQuery = async (question: string) => {
+    if (loading) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: input.trim(),
+      content: question,
       timestamp: new Date(),
     };
 
     setMessages(prev => [...prev, userMessage]);
-    setInput('');
     setLoading(true);
     setError(null);
 
-    // Create a placeholder message for streaming
     const assistantMessageId = (Date.now() + 1).toString();
     let streamedContent = '';
 
-    // Build conversation history for context
     const conversationHistory = messages.map(m => ({
       role: m.role,
       content: m.content,
@@ -159,13 +117,12 @@ export default function AskHope({ patientId, patientName, onOpenChange }: AskHop
     try {
       await apiService.ehrAgentQueryStream(
         {
-          question: userMessage.content,
+          question,
           patient_id: patientId,
           conversation_history: conversationHistory,
         },
         {
           onStatus: (status) => {
-            // Show status while loading
             setMessages(prev => {
               const filtered = prev.filter(m => m.id !== assistantMessageId);
               return [...filtered, {
@@ -176,13 +133,13 @@ export default function AskHope({ patientId, patientName, onOpenChange }: AskHop
               }];
             });
           },
-          onToolCall: (_tool, table, result) => {
+          onToolCall: (_tool, _table, _result) => {
             setMessages(prev => {
               const filtered = prev.filter(m => m.id !== assistantMessageId);
               return [...filtered, {
                 id: assistantMessageId,
                 role: 'assistant',
-                content: `*Fetching ${table} data... (${result})*`,
+                content: `*Calling tools...*`,
                 timestamp: new Date(),
               }];
             });
@@ -212,6 +169,13 @@ export default function AskHope({ patientId, patientName, onOpenChange }: AskHop
       setError(err.message || 'Failed to get response. Please try again.');
       setLoading(false);
     }
+  };
+
+  const sendMessage = async () => {
+    if (!input.trim() || loading) return;
+    const question = input.trim();
+    setInput('');
+    submitQuery(question);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -299,6 +263,23 @@ export default function AskHope({ patientId, patientName, onOpenChange }: AskHop
               AI assistant for clinical decision support. Verify all information before making treatment decisions.
             </p>
           </div>
+
+          {/* Action Pills - shown when no messages */}
+          {messages.length === 0 && !loading && (
+            <div className="space-y-2 mt-2">
+              <p className="text-xs text-gray-500 font-medium px-1">Quick actions</p>
+              {ACTION_PILLS.map((pill) => (
+                <button
+                  key={pill.label}
+                  onClick={() => handlePillClick(pill.prompt)}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-sm text-gray-700 hover:bg-[#f0f4f1] hover:text-[#4a5d4e] rounded-xl transition-colors border border-gray-100 hover:border-[#c5d1c8] bg-white"
+                >
+                  <pill.icon className="h-4 w-4 text-[#6b8070] flex-shrink-0" />
+                  {pill.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Messages */}
           {messages.map((message) => (

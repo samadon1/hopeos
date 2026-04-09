@@ -55,16 +55,19 @@ class AIService:
             print(f"Failed to connect to Ollama: {e}")
             return False
 
-    def _call_ollama(self, messages: list, max_tokens: int = 512, temperature: float = 0.7) -> str:
+    def _call_ollama(self, messages: list, max_tokens: int = 512, temperature: float = 0.7, num_ctx: int = 0) -> str:
         """Call Ollama chat API synchronously."""
+        options = {
+            "num_predict": max_tokens,
+            "temperature": temperature,
+        }
+        if num_ctx > 0:
+            options["num_ctx"] = num_ctx
         resp = self._client.post("/api/chat", json={
             "model": OLLAMA_MODEL,
             "messages": messages,
             "stream": False,
-            "options": {
-                "num_predict": max_tokens,
-                "temperature": temperature,
-            },
+            "options": options,
         })
         resp.raise_for_status()
         return resp.json().get("message", {}).get("content", "").strip()
@@ -90,6 +93,7 @@ class AIService:
         system_prompt: Optional[str] = None,
         max_tokens: int = 512,
         temperature: float = 0.7,
+        num_ctx: int = 0,
     ) -> str:
         """Generate text using Ollama API."""
         default_system = (
@@ -105,7 +109,7 @@ class AIService:
         messages = [{"role": "user", "content": combined_prompt}]
 
         try:
-            return self._call_ollama(messages, max_tokens, temperature)
+            return self._call_ollama(messages, max_tokens, temperature, num_ctx=num_ctx)
         except Exception as e:
             print(f"[DEBUG] Ollama generation error: {e}")
             return f"Error generating response: {str(e)}"
@@ -391,6 +395,18 @@ Keep it concise - physicians need quick insights, not lengthy narratives.
             image_data = base64.b64decode(image_base64)
             image = Image.open(io.BytesIO(image_data))
 
+            # Downscale large images — Tesseract works well at ~300 DPI
+            # Most phone photos are 12MP+, way more than needed
+            orig_size = image.size
+            max_dim = 1500
+            if max(image.size) > max_dim:
+                ratio = max_dim / max(image.size)
+                image = image.resize(
+                    (int(image.width * ratio), int(image.height * ratio)),
+                    Image.LANCZOS,
+                )
+                print(f"[DEBUG] Downscaled {orig_size[0]}x{orig_size[1]} → {image.size[0]}x{image.size[1]}")
+
             # OCR configuration for medical documents
             custom_config = r'--oem 3 --psm 6'
             ocr_text = pytesseract.image_to_string(image, config=custom_config)
@@ -438,8 +454,13 @@ Return ONLY valid JSON:
         """Parse OCR text using preloaded text model (no llama-server needed)."""
         try:
             print("[DEBUG] Parsing OCR text with Gemma...")
-            output = self._generate_text_only(prompt, max_tokens=800, temperature=0.3)
-            print(f"[DEBUG] Model output ({len(output)} chars): {output[:200]}")
+            system_prompt = (
+                "You are a medical document parser. "
+                "Extract patient data and return ONLY valid JSON. "
+                "No markdown, no explanation, no code blocks — just the raw JSON object."
+            )
+            output = self._generate_text_only(prompt, system_prompt=system_prompt, max_tokens=1500, temperature=0.1, num_ctx=2048)
+            print(f"[DEBUG] Model output ({len(output)} chars): {output[:500]}")
             return self._parse_vision_output(output)
         except Exception as e:
             print(f"[DEBUG] Text parsing error: {e}")
@@ -584,29 +605,50 @@ Return ONLY valid JSON:
 
     def _parse_vision_output(self, output: str) -> Dict[str, Any]:
         """Parse JSON from vision model output."""
-        # Extract JSON from output (may have thinking tags or other text)
-        json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', output, re.DOTALL)
+        # Strip markdown code blocks
+        cleaned = output.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned)
+            cleaned = re.sub(r'\s*```\s*$', '', cleaned)
+
+        # Strip thinking tags
+        if "<|channel>" in cleaned:
+            parts = cleaned.split("<|channel>")
+            cleaned = parts[-1].strip()
+
+        # Try direct parse first
+        try:
+            data = json.loads(cleaned)
+            data["success"] = True
+            return data
+        except json.JSONDecodeError:
+            pass
+
+        # Try to find JSON object in the text
+        json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
         if json_match:
-            json_str = json_match.group()
             try:
-                data = json.loads(json_str)
+                data = json.loads(json_match.group())
                 data["success"] = True
                 return data
             except json.JSONDecodeError:
-                pass
-
-        # Try to find JSON after any thinking/reasoning tags
-        if "<|channel>" in output:
-            parts = output.split("<|channel>")
-            for part in reversed(parts):
-                json_match = re.search(r'\{.*\}', part, re.DOTALL)
-                if json_match:
-                    try:
-                        data = json.loads(json_match.group())
-                        data["success"] = True
-                        return data
-                    except json.JSONDecodeError:
-                        continue
+                # Try to fix truncated JSON by closing it
+                truncated = json_match.group()
+                # Count unclosed braces/brackets
+                open_braces = truncated.count('{') - truncated.count('}')
+                open_brackets = truncated.count('[') - truncated.count(']')
+                # Remove trailing comma if any
+                truncated = re.sub(r',\s*$', '', truncated)
+                # Close any open strings
+                if truncated.count('"') % 2 != 0:
+                    truncated += '"'
+                truncated += ']' * open_brackets + '}' * open_braces
+                try:
+                    data = json.loads(truncated)
+                    data["success"] = True
+                    return data
+                except json.JSONDecodeError:
+                    pass
 
         return {
             "success": False,
@@ -1178,10 +1220,12 @@ Generate a response in valid JSON format with these fields:
 
 Important rules:
 - Use only SELECT statements
-- Always alias aggregated columns (e.g., COUNT(*) as count)
+- ALWAYS alias ALL columns, especially aggregates (e.g., COUNT(*) AS total, gender AS category)
+- The chart xKey and yKey MUST exactly match the column aliases in the SQL
 - Use proper JOINs when referencing multiple tables
 - For date ranges, use created_at or appropriate date columns
 - Limit results to 100 rows max for performance
+- For single-value results (e.g., total count), use chart type "table"
 
 Respond ONLY with valid JSON, no markdown, no explanation outside JSON:
 """

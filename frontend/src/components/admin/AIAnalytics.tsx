@@ -85,7 +85,9 @@ export default function AIAnalytics() {
       return null;
     }
 
-    const { chart, data } = result;
+    const { chart } = result;
+    let { data } = result;
+
 
     const CustomTooltip = ({ active, payload, label }: any) => {
       if (active && payload && payload.length) {
@@ -105,16 +107,25 @@ export default function AIAnalytics() {
       return null;
     };
 
+    // Resolve actual data keys for the chart
+    const columns = data.length > 0 ? Object.keys(data[0]) : [];
+    const resolvedYKey = chart.yKey && columns.includes(chart.yKey)
+      ? chart.yKey
+      : columns.find(c => typeof data[0]?.[c] === 'number') || columns[0];
+    const resolvedXKey = chart.xKey && columns.includes(chart.xKey)
+      ? chart.xKey
+      : columns.find(c => typeof data[0]?.[c] === 'string') || columns[0];
+
     switch (chart.type) {
       case 'bar':
         return (
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={data}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-              <XAxis dataKey={chart.xKey} stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
+              <XAxis dataKey={resolvedXKey} stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
               <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(value) => value >= 1000 ? `${(value / 1000).toFixed(1)}K` : value} />
               <Tooltip content={<CustomTooltip />} />
-              <Bar dataKey={chart.yKey} radius={[4, 4, 0, 0]}>
+              <Bar dataKey={resolvedYKey} fill={CHART_COLORS[0]} radius={[4, 4, 0, 0]}>
                 {data.map((_, index) => (
                   <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
                 ))}
@@ -128,10 +139,10 @@ export default function AIAnalytics() {
           <ResponsiveContainer width="100%" height={250}>
             <LineChart data={data}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey={chart.xKey} stroke="#94a3b8" fontSize={11} tickLine={false} />
+              <XAxis dataKey={resolvedXKey} stroke="#94a3b8" fontSize={11} tickLine={false} />
               <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} />
               <Tooltip content={<CustomTooltip />} />
-              <Line type="monotone" dataKey={chart.yKey} stroke="#4a5d4e" strokeWidth={2} dot={{ fill: '#4a5d4e', strokeWidth: 2 }} />
+              <Line type="monotone" dataKey={resolvedYKey} stroke="#4a5d4e" strokeWidth={2} dot={{ fill: '#4a5d4e', strokeWidth: 2 }} />
             </LineChart>
           </ResponsiveContainer>
         );
@@ -147,15 +158,21 @@ export default function AIAnalytics() {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey={chart.xKey} stroke="#94a3b8" fontSize={11} tickLine={false} />
+              <XAxis dataKey={resolvedXKey} stroke="#94a3b8" fontSize={11} tickLine={false} />
               <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} />
               <Tooltip content={<CustomTooltip />} />
-              <Area type="monotone" dataKey={chart.yKey} stroke="#4a5d4e" fill="url(#colorArea)" strokeWidth={2} />
+              <Area type="monotone" dataKey={resolvedYKey} stroke="#4a5d4e" fill="url(#colorArea)" strokeWidth={2} />
             </AreaChart>
           </ResponsiveContainer>
         );
 
-      case 'pie':
+      case 'pie': {
+        const resolvedValueKey = chart.valueKey && columns.includes(chart.valueKey)
+          ? chart.valueKey
+          : columns.find(c => typeof data[0]?.[c] === 'number') || columns[0];
+        const resolvedNameKey = chart.nameKey && columns.includes(chart.nameKey)
+          ? chart.nameKey
+          : columns.find(c => typeof data[0]?.[c] === 'string') || columns[0];
         return (
           <ResponsiveContainer width="100%" height={250}>
             <PieChart>
@@ -166,8 +183,8 @@ export default function AIAnalytics() {
                 innerRadius={50}
                 outerRadius={80}
                 paddingAngle={2}
-                dataKey={chart.valueKey}
-                nameKey={chart.nameKey}
+                dataKey={resolvedValueKey}
+                nameKey={resolvedNameKey}
                 label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
                 labelLine={false}
               >
@@ -179,6 +196,7 @@ export default function AIAnalytics() {
             </PieChart>
           </ResponsiveContainer>
         );
+      }
 
       default:
         return null;

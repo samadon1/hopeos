@@ -145,7 +145,7 @@ IMPORTANT FORMATTING RULES:
         response = ai_service.generate(
             prompt=prompt,
             system_prompt=system_prompt,
-            max_tokens=400,
+            max_tokens=800,
             temperature=0.5,
         )
 
@@ -184,7 +184,7 @@ IMPORTANT FORMATTING RULES:
         async for token in ai_service.generate_stream(
             prompt=prompt,
             system_prompt=system_prompt,
-            max_tokens=400,
+            max_tokens=800,
             temperature=0.5,
         ):
             yield token

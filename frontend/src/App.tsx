@@ -449,7 +449,7 @@ function App() {
               </AdminProtectedRoute>
             }
           />
-          <Route path="/" element={<LandingPage />} />
+          <Route path="/" element={<Navigate to="/admin/login" replace />} />
         </Routes>
         </Suspense>
       </Router>
