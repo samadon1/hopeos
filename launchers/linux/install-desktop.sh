@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Install HopeOS desktop launcher on Linux
 # Usage: Run from the HopeOS project root
-#   bash desktop/linux/install-desktop.sh
+#   bash launchers/linux/install-desktop.sh
 
 set -euo pipefail
 
-PROJECT_DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
+PROJECT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 
 if [[ ! -f "$PROJECT_DIR/setup.sh" ]]; then
     echo "Error: Run this from the HopeOS project directory."
@@ -22,7 +22,7 @@ Type=Application
 Name=HopeOS
 Comment=AI-Powered EHR for Rural Healthcare
 Exec=bash -c 'cd "$PROJECT_DIR" && bash setup.sh'
-Icon=$PROJECT_DIR/desktop/linux/hopeos-icon.png
+Icon=$PROJECT_DIR/launchers/linux/hopeos-icon.png
 Terminal=true
 Categories=Science;MedicalSoftware;
 StartupNotify=true

@@ -43,10 +43,14 @@ if [[ -z "$PROJECT_ROOT" || ! -f "$PROJECT_ROOT/setup.sh" ]]; then
     exit 1
 fi
 
-# Open Terminal and run setup.sh
+# Run setup.sh in background, Terminal stays hidden
 osascript << EOF
 tell application "Terminal"
-    activate
     do script "cd '$PROJECT_ROOT' && bash setup.sh"
+    -- Minimize the terminal window
+    delay 1
+    try
+        set miniaturized of front window to true
+    end try
 end tell
 EOF

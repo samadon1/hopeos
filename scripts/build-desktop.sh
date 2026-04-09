@@ -22,8 +22,8 @@ NC='\033[0m'
 info()    { echo -e "${BLUE}[INFO]${NC} $*"; }
 success() { echo -e "${GREEN}[OK]${NC}   $*"; }
 
-# ── Clean output ─────────────────────────────────────────────────────────────
-rm -rf "$OUTPUT_DIR"
+# ── Clean output (preserve shared files like loading.html, splash_server.py) ─
+rm -rf "$OUTPUT_DIR/HopeOS.app" "$OUTPUT_DIR/linux"
 mkdir -p "$OUTPUT_DIR"
 
 # =============================================================================
