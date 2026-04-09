@@ -186,7 +186,10 @@ start_ollama() {
 # ── Download & Import Model ──────────────────────────────────────────────────
 setup_model() {
     # Check if model already exists in Ollama
-    if ollama list 2>/dev/null | grep -q "$OLLAMA_MODEL"; then
+    # Note: use a variable to avoid pipefail + SIGPIPE issue with grep -q
+    local model_list
+    model_list="$(ollama list 2>/dev/null || true)"
+    if echo "$model_list" | grep -q "$OLLAMA_MODEL"; then
         success "Model '$OLLAMA_MODEL' already loaded in Ollama."
         return
     fi
