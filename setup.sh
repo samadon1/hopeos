@@ -58,7 +58,7 @@ cleanup() {
     if [[ -n "$SPLASH_PID" ]]; then
         kill "$SPLASH_PID" 2>/dev/null || true
     fi
-    for pid in "${PIDS[@]}"; do
+    for pid in "${PIDS[@]+"${PIDS[@]}"}"; do
         kill "$pid" 2>/dev/null || true
     done
     wait 2>/dev/null || true
