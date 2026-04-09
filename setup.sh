@@ -30,11 +30,22 @@ BLUE='\033[0;34m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
+# ── Status file for splash screen ───────────────────────────────────────────
+STATUS_FILE="/tmp/hopeos_status.json"
+SPLASH_PORT=3099
+SPLASH_PID=""
+
+update_status() {
+    local step="$1"
+    local detail="${2:-}"
+    echo "{\"step\":\"$step\",\"detail\":\"$detail\"}" > "$STATUS_FILE"
+}
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 info()    { echo -e "${BLUE}[INFO]${NC} $*"; }
 success() { echo -e "${GREEN}[OK]${NC}   $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
-fail()    { echo -e "${RED}[FAIL]${NC} $*"; exit 1; }
+fail()    { echo -e "${RED}[FAIL]${NC} $*"; update_status "error" "$*"; exit 1; }
 
 command_exists() { command -v "$1" &>/dev/null; }
 
@@ -43,10 +54,15 @@ PIDS=()
 cleanup() {
     echo ""
     info "Shutting down..."
+    # Stop splash server
+    if [[ -n "$SPLASH_PID" ]]; then
+        kill "$SPLASH_PID" 2>/dev/null || true
+    fi
     for pid in "${PIDS[@]}"; do
         kill "$pid" 2>/dev/null || true
     done
     wait 2>/dev/null || true
+    rm -f "$STATUS_FILE"
     success "All services stopped."
 }
 trap cleanup EXIT INT TERM
@@ -271,8 +287,17 @@ launch() {
     PIDS+=($!)
     cd "$SCRIPT_DIR"
 
-    # Wait for services to be ready
-    sleep 3
+    # Wait for frontend to be ready
+    info "Waiting for services to start..."
+    for i in $(seq 1 30); do
+        if curl -sf "http://localhost:$FRONTEND_PORT" &>/dev/null; then
+            break
+        fi
+        sleep 1
+    done
+
+    # Signal ready — splash page will auto-redirect
+    update_status "ready" ""
 
     echo ""
     echo -e "${GREEN}${BOLD}========================================${NC}"
@@ -286,11 +311,20 @@ launch() {
     echo -e "  Press ${BOLD}Ctrl+C${NC} to stop all services."
     echo ""
 
-    # Open browser
-    if [[ "$PLATFORM" == "macos" ]]; then
-        open "http://localhost:$FRONTEND_PORT" 2>/dev/null || true
-    elif command_exists xdg-open; then
-        xdg-open "http://localhost:$FRONTEND_PORT" 2>/dev/null || true
+    # If no splash server was running, open browser directly
+    if [[ -z "$SPLASH_PID" ]]; then
+        if [[ "$PLATFORM" == "macos" ]]; then
+            open "http://localhost:$FRONTEND_PORT" 2>/dev/null || true
+        elif command_exists xdg-open; then
+            xdg-open "http://localhost:$FRONTEND_PORT" 2>/dev/null || true
+        fi
+    fi
+
+    # Stop splash server after redirect delay
+    sleep 3
+    if [[ -n "$SPLASH_PID" ]]; then
+        kill "$SPLASH_PID" 2>/dev/null || true
+        SPLASH_PID=""
     fi
 
     # Keep running until Ctrl+C
@@ -306,23 +340,54 @@ main() {
     echo -e "${BOLD}========================================${NC}"
     echo ""
 
+    # Start splash screen server and open browser
+    update_status "platform" "Starting..."
+    if [[ -f "$SCRIPT_DIR/launchers/splash_server.py" ]]; then
+        # Kill any existing splash server
+        local existing_pid
+        existing_pid=$(lsof -ti:$SPLASH_PORT 2>/dev/null || true)
+        if [[ -n "$existing_pid" ]]; then
+            kill $existing_pid 2>/dev/null || true
+            sleep 0.5
+        fi
+        python3 "$SCRIPT_DIR/launchers/splash_server.py" &
+        SPLASH_PID=$!
+        sleep 1
+        # Open browser to splash screen
+        if [[ "${HOPEOS_NO_BROWSER:-}" != "1" ]]; then
+            if [[ "$(uname -s)" == "Darwin" ]]; then
+                open "http://localhost:$SPLASH_PORT" 2>/dev/null || true
+            elif command_exists xdg-open; then
+                xdg-open "http://localhost:$SPLASH_PORT" 2>/dev/null || true
+            fi
+        fi
+    fi
+
+    update_status "platform" "Detecting hardware..."
     detect_platform
 
     # Step 1: Prerequisites
+    update_status "prerequisites" "Checking Python, Node.js, Ollama..."
     info "Checking prerequisites..."
     [[ "$PLATFORM" == "macos" ]] && install_homebrew
     install_python
+    update_status "prerequisites" "Installing Node.js..."
     install_node
+    update_status "prerequisites" "Installing Ollama..."
     install_ollama
 
     # Step 2: Ollama + Model
+    update_status "ollama" "Starting Ollama..."
     start_ollama
+    update_status "model" "Loading AI model (~2.3 GB)..."
     setup_model
 
     # Step 3: Backend
+    update_status "backend" "Installing Python dependencies..."
     setup_backend
 
     # Step 4: Frontend
+    update_status "frontend" "Installing frontend dependencies..."
     setup_frontend
 
     # Step 5: Launch
