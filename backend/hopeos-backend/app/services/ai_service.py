@@ -45,7 +45,18 @@ class AIService:
                 print(f"Model '{OLLAMA_MODEL}' not found in Ollama. Available: {models}")
                 print(f"Run: ollama create {OLLAMA_MODEL} -f models/Modelfile")
                 return False
-            print(f"Ollama model '{OLLAMA_MODEL}' ready.")
+            print(f"Ollama model '{OLLAMA_MODEL}' ready. Pre-warming...")
+            # Pre-warm: load model into memory with a simple query
+            try:
+                self._client.post("/api/chat", json={
+                    "model": OLLAMA_MODEL,
+                    "messages": [{"role": "user", "content": "Hi"}],
+                    "stream": False,
+                    "keep_alive": "10m",
+                }, timeout=120.0)
+                print(f"Model '{OLLAMA_MODEL}' pre-warmed and ready.")
+            except Exception as e:
+                print(f"Pre-warm failed (non-fatal): {e}")
             self.model_loaded = True
             return True
         except httpx.ConnectError:
@@ -68,9 +79,16 @@ class AIService:
             "messages": messages,
             "stream": False,
             "options": options,
-        })
+            "keep_alive": "10m",  # Keep model loaded for 10 min (faster subsequent queries)
+        }, timeout=300.0)  # 5 min timeout for long prompts
         resp.raise_for_status()
-        return resp.json().get("message", {}).get("content", "").strip()
+        data = resp.json()
+        content = data.get("message", {}).get("content", "")
+        if not content:
+            print(f"[DEBUG] Ollama returned empty content. Keys: {data.keys()}")
+            if "error" in data:
+                print(f"[DEBUG] Ollama error: {data['error']}")
+        return content.strip()
 
     def generate(
         self,
@@ -1124,7 +1142,12 @@ Return ONLY valid JSON:
 
     # Database schema context for analytics queries
     DATABASE_SCHEMA = """
-Database Schema for HopeOS EHR System:
+Database Schema for HopeOS EHR System (SQLite database):
+
+IMPORTANT - SQLite syntax (NOT PostgreSQL):
+- Date math: date('now', '-1 year'), date('now', '-30 days'), date('now', '-6 months')
+- Month grouping: strftime('%Y-%m', date_column)
+- Do NOT use INTERVAL or PostgreSQL-specific syntax
 
 TABLES:
 1. patients - Patient demographics
@@ -1244,11 +1267,23 @@ Respond ONLY with valid JSON, no markdown, no explanation outside JSON:
                 temperature=0.3,  # Lower temperature for more consistent output
             )
 
-            # Parse JSON from response
-            # Clean up response - remove any markdown if present
+            # Debug: log response
+            print(f"[DEBUG] Analytics response length: {len(response) if response else 0}")
+            print(f"[DEBUG] Analytics response preview: {repr(response[:200]) if response else 'EMPTY'}")
+
+            # Check for empty response
+            if not response or not response.strip():
+                return {"error": "AI model returned empty response. The model may be overloaded or the prompt too complex."}
+
+            # Parse JSON from response - robust extraction
             cleaned = response.strip()
-            if cleaned.startswith("```"):
-                # Remove markdown code blocks
+
+            # Try to extract JSON object from response
+            json_match = re.search(r'\{[\s\S]*\}', cleaned)
+            if json_match:
+                cleaned = json_match.group(0)
+            elif cleaned.startswith("```"):
+                # Fallback: remove markdown code blocks
                 cleaned = re.sub(r'^```(?:json)?\n?', '', cleaned)
                 cleaned = re.sub(r'\n?```$', '', cleaned)
 

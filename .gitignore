@@ -121,3 +121,17 @@ mobile/
 # Vercel
 .vercel
 .DS_Store
+
+# Training data (uploaded to HuggingFace instead)
+training/synthea/
+training/data/
+
+# External tools
+llama.cpp/
+cactus-sdk/
+
+# Model files
+ncd-model/
+
+# Profiling
+*.profraw
