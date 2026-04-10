@@ -120,7 +120,16 @@ mobile/
 
 # Vercel
 .vercel
+vercel.json
+.vercelignore
 .DS_Store
+
+# Docs (not needed in repo)
+docs/
+
+# Scripts planning
+scripts/plan.md
+scripts/PLAN.md
 
 # Training data (uploaded to HuggingFace instead)
 training/synthea/
