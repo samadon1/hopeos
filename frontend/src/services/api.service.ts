@@ -75,6 +75,28 @@ export interface PatientSummaryResponse {
   disclaimer: string;
 }
 
+export interface NCDRiskRequest {
+  patient: {
+    age: number | string;
+    gender: string;
+    name?: string;
+  };
+  vitals?: Array<{ display?: string; name?: string; value?: any; unit?: string }>;
+  medications?: Array<{ drugName?: string; name?: string }>;
+  labResults?: Array<{ testType?: string; name?: string; resultValue?: any; value?: any }>;
+  diagnoses?: Array<{ conditionText?: string; name?: string }>;
+}
+
+export interface NCDRiskResponse {
+  assessment: string;
+  formatted_input: string;
+  has_clinical_signal: boolean;
+  available: boolean;
+  model: string;
+  generated_at: string;
+  disclaimer: string;
+}
+
 // Document Scanning types
 export interface ExtractedField {
   value: string | string[] | null;
@@ -939,6 +961,10 @@ class ApiService {
 
   async generatePatientSummary(request: PatientSummaryRequest): Promise<PatientSummaryResponse> {
     return this.post<PatientSummaryResponse>('/ai/patient/summary', request);
+  }
+
+  async generateNCDRiskAssessment(request: NCDRiskRequest): Promise<NCDRiskResponse> {
+    return this.post<NCDRiskResponse>('/ai/patient/ncd-risk', request);
   }
 
   async chat(request: {

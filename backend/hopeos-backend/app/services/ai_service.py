@@ -12,6 +12,11 @@ from pathlib import Path
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "hopeos-gemma4-iq2")
+# The fine-tuned NCD model is task-specific (NCD risk assessment only).
+# Defaults to the published merged+quantized model name. If not registered in
+# Ollama, the NCD endpoint reports it as unavailable so the frontend can fall
+# back to the rule-based CDS alerts instead of showing base-model output here.
+OLLAMA_NCD_MODEL = os.getenv("OLLAMA_NCD_MODEL", "hopeos-ncd-gemma4")
 
 
 class AIService:
@@ -386,6 +391,230 @@ Keep it concise - physicians need quick insights, not lengthy narratives.
             max_tokens=800,
             temperature=0.3,  # Lower temperature for more consistent clinical output
         )
+
+    # NCD risk assessment uses the exact instruction string the fine-tune was trained on.
+    # Keep this string byte-for-byte identical to the training dataset's `instruction` field
+    # so the model recognizes the task at inference time. See training/data/train.jsonl.
+    NCD_RISK_INSTRUCTION = (
+        "Based on the following patient record, assess the risk of Type 2 diabetes "
+        "and hypertension. Provide risk levels (LOW, MODERATE, HIGH, or DIAGNOSED) "
+        "with supporting factors, and clinical recommendations."
+    )
+
+    @staticmethod
+    def _format_patient_for_ncd(patient_data: Dict[str, Any]) -> str:
+        """Format patient record into the Synthea-style snapshot the NCD fine-tune expects.
+
+        Produces input like:
+            Patient: 52yo Female
+            Vitals: BP 142/88 mmHg, BMI 29.4, Weight 78.2 kg
+            Labs: Glucose 118 mg/dL, HbA1c 6.0%, Total Cholesterol 210 mg/dL
+            Active conditions: Prediabetes
+            Medications: None
+        """
+        patient = patient_data.get("patient", {}) or {}
+        vitals = patient_data.get("vitals", []) or []
+        labs = patient_data.get("labResults", []) or []
+        diagnoses = patient_data.get("diagnoses", []) or []
+        medications = patient_data.get("medications", []) or []
+
+        def _label(item: dict) -> str:
+            return str(
+                item.get("display")
+                or item.get("name")
+                or item.get("type")
+                or item.get("concept_display")
+                or (item.get("concept") or {}).get("display", "")
+                or item.get("testType")
+                or ""
+            ).lower()
+
+        def _num(item: dict):
+            for key in ("value", "valueNumeric", "value_numeric", "resultValue", "result_value"):
+                v = item.get(key)
+                if v is None or v == "":
+                    continue
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    continue
+            return None
+
+        def _find(items, *keywords):
+            for it in items:
+                label = _label(it)
+                if all(k in label for k in keywords):
+                    n = _num(it)
+                    if n is not None:
+                        return n
+            return None
+
+        # Demographics
+        age = patient.get("age", "Unknown")
+        gender = (patient.get("gender") or "Unknown").capitalize()
+        header = f"Patient: {age}yo {gender}"
+
+        # Vitals — match the training format
+        vital_parts = []
+        sys_bp = _find(vitals, "systolic")
+        dia_bp = _find(vitals, "diastolic")
+        if sys_bp is not None and dia_bp is not None:
+            vital_parts.append(f"BP {sys_bp:g}/{dia_bp:g} mmHg")
+        bmi = _find(vitals, "bmi") or _find(vitals, "body", "mass")
+        if bmi is not None:
+            vital_parts.append(f"BMI {bmi:g}")
+        weight = _find(vitals, "weight")
+        if weight is not None:
+            vital_parts.append(f"Weight {weight:g} kg")
+        hr = _find(vitals, "heart") or _find(vitals, "pulse")
+        if hr is not None:
+            vital_parts.append(f"HR {hr:g} bpm")
+
+        # Labs — keywords match common naming variants
+        lab_parts = []
+        glucose = _find(labs, "glucose")
+        if glucose is not None:
+            lab_parts.append(f"Glucose {glucose:g} mg/dL")
+        hba1c = _find(labs, "hba1c") or _find(labs, "a1c") or _find(labs, "hemoglobin", "a1c")
+        if hba1c is not None:
+            lab_parts.append(f"HbA1c {hba1c:g}%")
+        total_chol = _find(labs, "total", "cholesterol")
+        if total_chol is not None:
+            lab_parts.append(f"Total Cholesterol {total_chol:g} mg/dL")
+        hdl = _find(labs, "hdl")
+        if hdl is not None:
+            lab_parts.append(f"HDL Cholesterol {hdl:g} mg/dL")
+        ldl = _find(labs, "ldl")
+        if ldl is not None:
+            lab_parts.append(f"LDL Cholesterol {ldl:g} mg/dL")
+        trig = _find(labs, "triglyceride")
+        if trig is not None:
+            lab_parts.append(f"Triglycerides {trig:g} mg/dL")
+        creat = _find(labs, "creatinine")
+        if creat is not None:
+            lab_parts.append(f"Creatinine {creat:g} mg/dL")
+        egfr = _find(labs, "egfr") or _find(labs, "gfr")
+        if egfr is not None:
+            lab_parts.append(f"eGFR {egfr:g} mL/min/1.73m²")
+
+        # Active conditions
+        condition_names = []
+        for dx in diagnoses:
+            name = (
+                dx.get("conditionText")
+                or dx.get("condition_text")
+                or dx.get("display")
+                or dx.get("name")
+            )
+            if name:
+                condition_names.append(str(name))
+
+        # Medications
+        med_names = []
+        for m in medications:
+            name = m.get("drugName") or m.get("drug_name") or m.get("name") or m.get("display")
+            if name:
+                med_names.append(str(name))
+
+        lines = [header]
+        if vital_parts:
+            lines.append("Vitals: " + ", ".join(vital_parts))
+        if lab_parts:
+            lines.append("Labs: " + ", ".join(lab_parts))
+        if condition_names:
+            lines.append("Active conditions: " + ", ".join(condition_names[:10]))
+        lines.append("Medications: " + (", ".join(med_names[:10]) if med_names else "None"))
+
+        return "\n".join(lines)
+
+    def _ncd_model_available(self) -> bool:
+        """Check whether the fine-tuned NCD model is registered in Ollama."""
+        try:
+            resp = self._client.get("/api/tags", timeout=5.0)
+            if resp.status_code != 200:
+                return False
+            models = [m.get("name", "") for m in resp.json().get("models", [])]
+            # Ollama tag matching: stored names may have ":latest" appended.
+            return any(m == OLLAMA_NCD_MODEL or m.startswith(f"{OLLAMA_NCD_MODEL}:") for m in models)
+        except Exception:
+            return False
+
+    def generate_ncd_risk_assessment(self, patient_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Run the NCD risk assessment using the fine-tuned NCD model directly.
+
+        Calls OLLAMA_NCD_MODEL (the fine-tune), not the general OLLAMA_MODEL.
+        If the fine-tune isn't registered in Ollama, returns available=False so
+        the frontend hides the AI section and the rule-based CDS alerts carry it.
+        """
+        snapshot = self._format_patient_for_ncd(patient_data)
+
+        # If the snapshot has no vitals or labs, the model has nothing to assess.
+        has_clinical_signal = (
+            "Vitals:" in snapshot or "Labs:" in snapshot or "Active conditions:" in snapshot
+        )
+        if not has_clinical_signal:
+            return {
+                "assessment": (
+                    "## Risk Assessment\n\n"
+                    "Insufficient clinical data to assess NCD risk. "
+                    "Record vitals (BP, BMI) and basic labs (glucose, HbA1c) to enable assessment."
+                ),
+                "formatted_input": snapshot,
+                "has_clinical_signal": False,
+                "available": True,
+                "model": OLLAMA_NCD_MODEL,
+            }
+
+        # Gate: only run the AI assessment when the fine-tune is actually present.
+        if not self._ncd_model_available():
+            return {
+                "assessment": "",
+                "formatted_input": snapshot,
+                "has_clinical_signal": True,
+                "available": False,
+                "model": OLLAMA_NCD_MODEL,
+            }
+
+        prompt = f"{self.NCD_RISK_INSTRUCTION}\n\n{snapshot}"
+
+        # Direct call to the NCD-specific model — bypasses OLLAMA_MODEL so
+        # the other surfaces (OCR, chat, analytics) keep using base Gemma.
+        try:
+            resp = self._client.post(
+                "/api/chat",
+                json={
+                    "model": OLLAMA_NCD_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    "options": {
+                        # Temperature 0.2 — the fine-tune was trained to produce
+                        # a specific markdown shape; low temperature keeps it on-rails.
+                        "temperature": 0.2,
+                        "num_predict": 600,
+                    },
+                    "keep_alive": "10m",
+                },
+                timeout=120.0,
+            )
+            resp.raise_for_status()
+            assessment = resp.json().get("message", {}).get("content", "").strip()
+        except Exception as e:
+            print(f"[DEBUG] NCD model call failed: {e}")
+            return {
+                "assessment": "",
+                "formatted_input": snapshot,
+                "has_clinical_signal": True,
+                "available": False,
+                "model": OLLAMA_NCD_MODEL,
+            }
+
+        return {
+            "assessment": assessment,
+            "formatted_input": snapshot,
+            "has_clinical_signal": True,
+            "available": True,
+            "model": OLLAMA_NCD_MODEL,
+        }
 
     # Path to llama-mtmd-cli for native vision
     LLAMA_MTMD_CLI = os.getenv("LLAMA_MTMD_CLI", "/opt/homebrew/bin/llama-mtmd-cli")

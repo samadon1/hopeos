@@ -1409,6 +1409,7 @@ const SimpleDashboard: React.FC<SimpleDashboardProps> = ({
                 {isAdminView && patientData && (
                   <NCDAlerts
                     patientData={{
+                      patient: patientData.patient,
                       vitals: patientData.vitals,
                       medications: patientData.pharmacyOrders || patientData.medications,
                       labResults: patientData.labOrders || patientData.labTests,

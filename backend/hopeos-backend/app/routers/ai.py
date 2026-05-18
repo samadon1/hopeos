@@ -85,6 +85,26 @@ class PatientSummaryResponse(BaseModel):
     disclaimer: str
 
 
+class NCDRiskRequest(BaseModel):
+    """NCD risk assessment request. Same shape as PatientSummaryRequest."""
+    patient: Dict[str, Any]  # age, gender (name optional)
+    vitals: Optional[List[Dict[str, Any]]] = []
+    medications: Optional[List[Dict[str, Any]]] = []
+    labResults: Optional[List[Dict[str, Any]]] = []
+    diagnoses: Optional[List[Dict[str, Any]]] = []
+
+
+class NCDRiskResponse(BaseModel):
+    """NCD risk assessment response."""
+    assessment: str  # Markdown — risk levels, factors, recommendations. Empty when not available.
+    formatted_input: str  # The patient snapshot the model saw — surfaces what it had to work with
+    has_clinical_signal: bool  # False when the patient had no vitals/labs/conditions to assess
+    available: bool  # False when the fine-tuned NCD model isn't registered in Ollama
+    model: str  # The model name that was (or would have been) used
+    generated_at: str
+    disclaimer: str
+
+
 class ModelStatusResponse(BaseModel):
     """Model status response."""
     model_loaded: bool
@@ -454,6 +474,52 @@ async def generate_patient_summary(
         summary=summary,
         generated_at=datetime.utcnow().isoformat(),
         disclaimer="AI-generated summary for clinical decision support. Verify all information before making treatment decisions.",
+    )
+
+
+@router.post("/patient/ncd-risk", response_model=NCDRiskResponse)
+async def generate_ncd_risk(
+    request: NCDRiskRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Run the fine-tuned NCD risk assessment for a patient.
+
+    Formats the patient record into the Synthea-style snapshot the NCD fine-tune
+    was trained on and returns a structured markdown risk assessment for
+    Type 2 diabetes and hypertension with supporting factors and recommendations.
+
+    Requires clinical staff access (doctor, nurse, admin).
+    """
+    if current_user.role not in ["admin", "doctor", "nurse"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Clinical staff access required"
+        )
+
+    from datetime import datetime
+
+    patient_data = {
+        "patient": request.patient,
+        "vitals": request.vitals or [],
+        "medications": request.medications or [],
+        "labResults": request.labResults or [],
+        "diagnoses": request.diagnoses or [],
+    }
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        _ai_executor,
+        partial(ai_service.generate_ncd_risk_assessment, patient_data),
+    )
+
+    return NCDRiskResponse(
+        assessment=result["assessment"],
+        formatted_input=result["formatted_input"],
+        has_clinical_signal=result["has_clinical_signal"],
+        available=result.get("available", True),
+        model=result.get("model", ""),
+        generated_at=datetime.utcnow().isoformat(),
+        disclaimer="AI-generated NCD risk assessment for clinical decision support. Not a diagnosis. Confirm thresholds and treatment decisions with the treating clinician.",
     )
 
 

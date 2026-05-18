@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   AlertTriangle,
   AlertCircle,
@@ -14,7 +14,10 @@ import {
   ChevronUp,
   X,
   Loader2,
+  Sparkles,
+  RefreshCw,
 } from 'lucide-react';
+import { apiService, NCDRiskResponse } from '../../services/api.service';
 
 // Alert severity levels
 type AlertSeverity = 'critical' | 'warning' | 'info';
@@ -49,6 +52,120 @@ interface NCDAlertsProps {
     allergies?: any[];
   };
 }
+
+// Minimal markdown renderer for the NCD assessment output.
+// The fine-tune was trained to produce a tight, known shape:
+//   ## Header     ->  section heading
+//   **Label: X**  ->  bold (often the risk-level line)
+//   - bullet      ->  bullet list
+//   1. step       ->  numbered list
+// Anything fancier (links, tables, code) is out of scope by design.
+const renderAssessment = (text: string) => {
+  const lines = text.split('\n');
+  const blocks: React.ReactNode[] = [];
+  let listBuffer: { ordered: boolean; items: string[] } | null = null;
+
+  const flushList = () => {
+    if (!listBuffer) return;
+    const { ordered, items } = listBuffer;
+    const Tag = ordered ? 'ol' : 'ul';
+    blocks.push(
+      <Tag
+        key={`list-${blocks.length}`}
+        className={`${ordered ? 'list-decimal' : 'list-disc'} pl-5 my-2 space-y-1 text-sm text-slate-700`}
+      >
+        {items.map((item, i) => (
+          <li key={i}>{renderInline(item)}</li>
+        ))}
+      </Tag>
+    );
+    listBuffer = null;
+  };
+
+  const renderInline = (s: string): React.ReactNode => {
+    // Bold via **...**; everything else is plain text.
+    const parts = s.split(/(\*\*[^*]+\*\*)/g);
+    return parts.map((p, i) =>
+      p.startsWith('**') && p.endsWith('**') ? (
+        <strong key={i} className="font-semibold text-slate-900">{p.slice(2, -2)}</strong>
+      ) : (
+        <span key={i}>{p}</span>
+      )
+    );
+  };
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (!line.trim()) {
+      flushList();
+      continue;
+    }
+    const headerMatch = line.match(/^##\s+(.*)$/);
+    if (headerMatch) {
+      flushList();
+      blocks.push(
+        <h4
+          key={`h-${blocks.length}`}
+          className="text-sm font-semibold text-slate-900 mt-3 first:mt-0 mb-1"
+        >
+          {headerMatch[1]}
+        </h4>
+      );
+      continue;
+    }
+    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+    if (bullet) {
+      if (!listBuffer || listBuffer.ordered) {
+        flushList();
+        listBuffer = { ordered: false, items: [] };
+      }
+      listBuffer.items.push(bullet[1]);
+      continue;
+    }
+    const numbered = line.match(/^\s*\d+\.\s+(.*)$/);
+    if (numbered) {
+      if (!listBuffer || !listBuffer.ordered) {
+        flushList();
+        listBuffer = { ordered: true, items: [] };
+      }
+      listBuffer.items.push(numbered[1]);
+      continue;
+    }
+    flushList();
+    blocks.push(
+      <p key={`p-${blocks.length}`} className="text-sm text-slate-700 my-1">
+        {renderInline(line)}
+      </p>
+    );
+  }
+  flushList();
+  return blocks;
+};
+
+// Pull a risk-level chip color out of the assessment markdown's "**X: LEVEL**" lines.
+const levelChipClass = (level: string): string => {
+  switch (level.toUpperCase()) {
+    case 'HIGH':
+    case 'DIAGNOSED':
+      return 'bg-rose-100 text-rose-700 border-rose-200';
+    case 'MODERATE':
+      return 'bg-amber-100 text-amber-700 border-amber-200';
+    case 'LOW':
+      return 'bg-emerald-100 text-emerald-700 border-emerald-200';
+    default:
+      return 'bg-slate-100 text-slate-700 border-slate-200';
+  }
+};
+
+const extractRiskChips = (text: string): Array<{ disease: string; level: string }> => {
+  const chips: Array<{ disease: string; level: string }> = [];
+  const re = /\*\*([^:*]+):\s*(LOW|MODERATE|HIGH|DIAGNOSED)\*\*/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    chips.push({ disease: m[1].trim(), level: m[2].toUpperCase() });
+  }
+  return chips;
+};
 
 // NCD-related diagnosis keywords
 const NCD_KEYWORDS = {
@@ -468,19 +585,94 @@ export default function NCDAlerts({ patientData }: NCDAlertsProps) {
   const [expanded, setExpanded] = useState(true);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
+  // AI assessment state — driven by the fine-tuned NCD model.
+  const [aiAssessment, setAiAssessment] = useState<NCDRiskResponse | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  // Identity key for the patient currently in view — resets the AI state when it changes.
+  const lastPatientKey = useRef<string | null>(null);
+
   useEffect(() => {
     const generatedAlerts = generateAlerts(patientData);
     setAlerts(generatedAlerts);
   }, [patientData]);
+
+  // Build the request from whichever data shapes the dashboard happens to pass.
+  // Mirrors the fallback chain SimpleDashboard uses (pharmacyOrders ?? medications, etc).
+  const buildRiskRequest = () => {
+    const age = patientData.patient?.person?.age;
+    const gender = patientData.patient?.person?.gender;
+    if (!age || !gender) return null;
+    return {
+      patient: { age, gender },
+      vitals: patientData.vitals || [],
+      medications: patientData.pharmacyOrders || patientData.medications || [],
+      labResults: patientData.labResults || patientData.labOrders || patientData.labTests || [],
+      diagnoses: patientData.diagnoses || [],
+    };
+  };
+
+  const runAssessment = async (force = false) => {
+    if (aiLoading) return;
+    if (aiAssessment && !force) return;
+    const req = buildRiskRequest();
+    if (!req) {
+      setAiError('Patient demographics (age, gender) required for AI assessment.');
+      return;
+    }
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const result = await apiService.generateNCDRiskAssessment(req);
+      setAiAssessment(result);
+    } catch (e: any) {
+      setAiError(e?.message || 'AI assessment failed. Verify the model is loaded.');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  // Auto-run once per patient. The fine-tune is the patient chart's signature
+  // AI moment — running on mount makes it visible without a click. Resets when
+  // the user switches to a different patient (component is not always unmounted).
+  useEffect(() => {
+    const age = patientData.patient?.person?.age;
+    const gender = patientData.patient?.person?.gender;
+    if (!age || !gender) return;
+    const vitalsCount = (patientData.vitals || []).length;
+    const labsCount = (patientData.labResults || patientData.labOrders || patientData.labTests || []).length;
+    const key = `${age}|${gender}|${vitalsCount}|${labsCount}`;
+    if (lastPatientKey.current === key) return;
+    lastPatientKey.current = key;
+    setAiAssessment(null);
+    setAiError(null);
+    runAssessment(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    patientData.patient?.person?.age,
+    patientData.patient?.person?.gender,
+    patientData.vitals,
+    patientData.labResults,
+    patientData.labOrders,
+    patientData.labTests,
+  ]);
 
   const visibleAlerts = alerts.filter(a => !dismissed.has(a.id));
   const criticalCount = visibleAlerts.filter(a => a.severity === 'critical').length;
   const warningCount = visibleAlerts.filter(a => a.severity === 'warning').length;
   const infoCount = visibleAlerts.filter(a => a.severity === 'info').length;
 
-  if (visibleAlerts.length === 0) {
+  // Only show the AI section when the fine-tuned NCD model is actually available.
+  // If it isn't, the deterministic rule-based alerts carry the panel by themselves.
+  const aiAvailable = aiAssessment?.available !== false;
+  const showAiSection = aiAvailable && (aiLoading || aiAssessment || aiError);
+  if (visibleAlerts.length === 0 && !showAiSection) {
     return null;
   }
+
+  const riskChips = aiAssessment && aiAssessment.available
+    ? extractRiskChips(aiAssessment.assessment)
+    : [];
 
   // Sort: critical first, then warning, then info
   const sortedAlerts = [...visibleAlerts].sort((a, b) => {
@@ -527,9 +719,10 @@ export default function NCDAlerts({ patientData }: NCDAlertsProps) {
         )}
       </div>
 
-      {/* Alerts List */}
+      {/* Alerts List + AI Assessment */}
       {expanded && (
         <div className="border border-t-0 border-slate-200 rounded-b-xl overflow-hidden bg-white shadow-sm">
+          {/* Rule-based alerts */}
           {sortedAlerts.map((alert, index) => {
             const styles = getSeverityStyles(alert.severity);
 
@@ -591,6 +784,80 @@ export default function NCDAlerts({ patientData }: NCDAlertsProps) {
               </div>
             );
           })}
+
+          {/* AI Risk Assessment — fine-tuned Gemma 4 NCD model */}
+          {showAiSection && (
+            <div className={`${sortedAlerts.length > 0 ? 'border-t border-slate-200' : ''} bg-gradient-to-br from-indigo-50/40 to-white px-4 py-3.5`}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <div className="p-1 rounded bg-indigo-100">
+                    <Sparkles className="h-3.5 w-3.5 text-indigo-600" />
+                  </div>
+                  <span className="text-sm font-semibold text-slate-800">AI Risk Assessment</span>
+                  <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-indigo-100/70 text-indigo-700 border border-indigo-200/50 font-medium">
+                    Fine-tuned Gemma 4
+                  </span>
+                </div>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    runAssessment(true);
+                  }}
+                  disabled={aiLoading}
+                  className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Re-run assessment"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${aiLoading ? 'animate-spin' : ''}`} />
+                  Re-run
+                </button>
+              </div>
+
+              {aiLoading && !aiAssessment && (
+                <div className="flex items-center gap-2 text-sm text-slate-500 py-2">
+                  <Loader2 className="h-4 w-4 animate-spin text-indigo-500" />
+                  Analyzing patient record with NCD model…
+                </div>
+              )}
+
+              {aiError && (
+                <div className="flex items-start gap-2 text-sm text-rose-700 bg-rose-50/60 border border-rose-200/50 rounded-md px-3 py-2">
+                  <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                  <span>{aiError}</span>
+                </div>
+              )}
+
+              {aiAssessment && (
+                <div>
+                  {riskChips.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {riskChips.map((chip, i) => (
+                        <span
+                          key={i}
+                          className={`text-xs font-medium px-2 py-0.5 rounded-full border ${levelChipClass(chip.level)}`}
+                        >
+                          {chip.disease}: {chip.level}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="text-sm text-slate-700">
+                    {renderAssessment(aiAssessment.assessment)}
+                  </div>
+                  <details className="mt-3 text-xs text-slate-500">
+                    <summary className="cursor-pointer hover:text-slate-700 select-none">
+                      Source data sent to model
+                    </summary>
+                    <pre className="mt-1.5 p-2 bg-slate-50 border border-slate-200/60 rounded text-[11px] font-mono text-slate-600 whitespace-pre-wrap">
+                      {aiAssessment.formatted_input}
+                    </pre>
+                  </details>
+                  <p className="mt-2 text-[11px] text-slate-400 italic">
+                    {aiAssessment.disclaimer}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
